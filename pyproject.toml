@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oxford-ledge-mcp"
+version = "2.0.3"
+description = "MCP server for Oxford Ledge financial terminal — 36 tools for stocks, SEC filings, credit data, bonds, macro indicators, and BDC holdings from Claude Desktop"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Oxford Ledge", email = "contact@oxfordledge.com"},
+]
+keywords = ["mcp", "finance", "stocks", "sec", "edgar", "bonds", "bdc", "credit", "claude", "anthropic"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = []  # Y1 (2026-04-24): yfinance removed. Core stdlib only.
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0.0"]
+
+[project.urls]
+Homepage = "https://www.oxfordledge.com"
+Repository = "https://github.com/hs902/oxford-ledge-mcp"
+Documentation = "https://www.oxfordledge.com/llm-guide"
+
+[project.scripts]
+oxford-ledge-mcp = "oxford_ledge_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
