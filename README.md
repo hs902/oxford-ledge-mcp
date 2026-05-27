@@ -17,7 +17,7 @@ tools; the rest require an Oxford Ledge API endpoint — see
 ## Install
 
 ```bash
-pip install oxfordledge-mcp
+pip install oxford-ledge-mcp
 ```
 
 ---

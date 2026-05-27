@@ -34,6 +34,7 @@ from .registry import (
     tier_sufficient,
 )
 from .cache import cache_key, cache_get, cache_set, clear_cache, cache_stats
+from .ticker import normalize_ticker
 
 __all__ = [
     "ToolError",
@@ -53,4 +54,5 @@ __all__ = [
     "cache_stats",
     "TIER_ORDER",
     "tier_sufficient",
+    "normalize_ticker",
 ]

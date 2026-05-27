@@ -79,6 +79,11 @@ from oxford_ledge_mcp_core import (
     cache_set as _cache_set_core,
     clear_cache as _clear_cache_core,
 )
+# F5 (2026-05-27): ticker-input normalization helper. Routes the
+# `args["ticker"].upper().strip()` callsites through one helper so
+# missing-key inputs surface as ToolError.BAD_INPUT (downstream
+# validators) instead of raw KeyError.
+from oxford_ledge_mcp_core.ticker import normalize_ticker
 _CACHE_TTL_MARKET = MARKET
 _CACHE_TTL_FUNDAMENTAL = FUNDAMENTAL
 _CACHE_TTL_STATIC = STATIC
@@ -690,7 +695,7 @@ def tool_get_stock_quote(args):
     tool because our data pipeline (FMP + SEC EDGAR + Finnhub) lives
     server-side.
     """
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     data = _api_get("/api/data", {"ticker": ticker})
     if not isinstance(data, dict):
         raise ToolError(ToolError.DATA_UNAVAILABLE, f"No data found for ticker '{ticker}'")
@@ -720,7 +725,7 @@ def tool_get_stock_quote(args):
 @mcp_tool(name="get_financials", cache=FUNDAMENTAL)
 def tool_get_financials(args):
     """Income statement — requires OXFORD_LEDGE_URL (Y1 2026-04-24)."""
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     data = _api_get("/api/company-financials", {"ticker": ticker, "years": 10})
     if not isinstance(data, dict):
         raise ToolError(ToolError.DATA_UNAVAILABLE, f"No financial data available for '{ticker}'")
@@ -741,7 +746,7 @@ def tool_get_financials(args):
 @mcp_tool(name="get_balance_sheet", cache=FUNDAMENTAL)
 def tool_get_balance_sheet(args):
     """Balance sheet — requires OXFORD_LEDGE_URL (Y1 2026-04-24)."""
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     data = _api_get("/api/company-financials", {"ticker": ticker, "years": 10})
     if not isinstance(data, dict):
         raise ToolError(ToolError.DATA_UNAVAILABLE, f"No balance sheet data available for '{ticker}'")
@@ -764,7 +769,7 @@ def tool_get_balance_sheet(args):
 @mcp_tool(name="get_cash_flow", cache=FUNDAMENTAL)
 def tool_get_cash_flow(args):
     """Cash flow statement — requires OXFORD_LEDGE_URL (Y1 2026-04-24)."""
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     data = _api_get("/api/company-financials", {"ticker": ticker, "years": 10})
     if not isinstance(data, dict):
         raise ToolError(ToolError.DATA_UNAVAILABLE, f"No cash flow data available for '{ticker}'")
@@ -786,7 +791,7 @@ def tool_get_cash_flow(args):
 def tool_get_analyst_recommendations(args):
     """Analyst target prices + consensus recommendation.
     Y1 (2026-04-24): now requires OXFORD_LEDGE_URL (routes via FMP)."""
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     data = _api_get("/api/analyst-estimates", {"ticker": ticker})
     if not isinstance(data, dict):
         raise ToolError(ToolError.DATA_UNAVAILABLE, f"No analyst data for '{ticker}'")
@@ -808,7 +813,7 @@ def tool_get_holders(args):
     Y1 (2026-04-24): now requires OXFORD_LEDGE_URL (routes via
     Oxford Ledge's SEC EDGAR integration). Migration path for future
     standalone support: call SEC EDGAR 13F endpoint directly."""
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     data = _api_get("/api/13f-holdings", {"ticker": ticker})
     if not isinstance(data, dict):
         return {"ticker": ticker, "holders": []}
@@ -828,7 +833,7 @@ def tool_get_holders(args):
 def tool_get_company_info(args):
     """Sector, industry, employees, description.
     Y1 (2026-04-24): now requires OXFORD_LEDGE_URL."""
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     data = _api_get("/api/company-profile", {"ticker": ticker})
     if not isinstance(data, dict):
         raise ToolError(ToolError.DATA_UNAVAILABLE, f"No company info for '{ticker}'")
@@ -851,7 +856,7 @@ def tool_compare_stocks(args):
     """Side-by-side comparison of 2-5 tickers.
     Y1 (2026-04-24): now requires OXFORD_LEDGE_URL. Composes /api/data
     lookups per ticker; no new upstream dependency."""
-    tickers = [t.strip().upper() for t in args["tickers"].split(",") if t.strip()][:5]
+    tickers = [normalize_ticker(t) for t in (args.get("tickers") or "").split(",") if t.strip()][:5]
     if len(tickers) < 2:
         raise ToolError(ToolError.INVALID_PARAMS, "Provide at least 2 comma-separated tickers")
     results = []
@@ -886,7 +891,7 @@ def tool_compare_stocks(args):
 
 @mcp_tool(name="get_sec_filings", cache=FUNDAMENTAL)
 def tool_get_sec_filings(args):
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     filing_type = args.get("filing_type", "").strip()
     try:
         cik_url = (
@@ -918,7 +923,7 @@ def tool_get_insider_trades(args):
     Y1 (2026-04-24): now requires OXFORD_LEDGE_URL. Backed by OL's
     form4_transactions table (176K rows) which sources directly from
     SEC EDGAR — more authoritative than yfinance's scraped view."""
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     data = _api_get("/api/insider-activity", {"ticker": ticker})
     if not isinstance(data, dict):
         return {"ticker": ticker, "trades": []}
@@ -935,7 +940,10 @@ def tool_get_insider_trades(args):
     return {"ticker": ticker, "trades": trades}
 
 
-@mcp_tool(name="get_options_chain", cache=FUNDAMENTAL)
+# min_tier="plus": premium analytics tool. Mirrors canonical in-tree
+# per-tool tier table. Standalone stdio mode is not tier-enforced;
+# API mode (OXFORD_LEDGE_URL set) enforces tier server-side.
+@mcp_tool(name="get_options_chain", cache=FUNDAMENTAL, min_tier="plus")
 def tool_get_options_chain(args):
     """Options chain with Greeks.
     Y1 (2026-04-24): was yfinance; now routes to OL's options endpoint
@@ -943,7 +951,7 @@ def tool_get_options_chain(args):
     tool is effectively a stub until Tradier lands — signals ApiRequired
     when OL is reachable but returns the upstream's 'not implemented'
     structured error."""
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     data = _api_get("/api/options", {"ticker": ticker})
     # Bubble up OL's response shape directly; OL may return
     # {"error": "not_implemented", "reason": "Tradier activation required"}
@@ -987,7 +995,7 @@ def tool_screen_stocks(args):
 @mcp_tool(name="get_fundamentals", cache=FUNDAMENTAL, heavy=True)
 def tool_get_fundamentals(args):
     """Get XBRL fundamentals from SEC EDGAR directly."""
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     try:
         # Step 1: Resolve ticker to CIK
         tickers_url = "https://www.sec.gov/files/company_tickers.json"
@@ -996,7 +1004,7 @@ def tool_get_fundamentals(args):
             tickers_data = json.loads(resp.read().decode("utf-8"))
         cik = None
         for entry in tickers_data.values():
-            if entry.get("ticker", "").upper() == ticker:
+            if normalize_ticker(entry.get("ticker")) == ticker:
                 cik = str(entry["cik_str"]).zfill(10)
                 break
         if not cik:
@@ -1205,7 +1213,7 @@ def tool_get_short_interest(args):
     /api/short-interest endpoint which is blocked on OWNER #23 (FINRA
     Data API creds). Until that clears, the tool surfaces OL's
     "not_implemented" structured response."""
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     data = _api_get("/api/short-interest", {"ticker": ticker})
     if not isinstance(data, dict):
         return {"ticker": ticker, "error": "Unexpected upstream response"}
@@ -1225,7 +1233,7 @@ def tool_get_short_interest(args):
 
 @mcp_tool(name="get_company_data", cache=MARKET)
 def tool_get_company_data(args):
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     return _api_get(f"/api/data", {"ticker": ticker})
 
 
@@ -1236,13 +1244,13 @@ def tool_search_company(args):
 
 @mcp_tool(name="get_company_profile", cache=FUNDAMENTAL)
 def tool_get_company_profile(args):
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     return _api_get(f"/api/data", {"ticker": ticker})
 
 
 @mcp_tool(name="get_corporate_events", cache=FUNDAMENTAL)
 def tool_get_corporate_events(args):
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     params = {"ticker": ticker}
     if args.get("event_type"):
         params["event_type"] = args["event_type"]
@@ -1266,7 +1274,7 @@ def tool_get_bdc_list(args):
 
 @mcp_tool(name="calculate_intrinsic_value", cache=NEVER)
 def tool_calculate_intrinsic_value(args):
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     params = {"ticker": ticker}
     if args.get("method"):
         params["method"] = args["method"]
@@ -1275,25 +1283,27 @@ def tool_calculate_intrinsic_value(args):
 
 @mcp_tool(name="get_anomaly_flags", cache=MARKET)
 def tool_get_anomaly_flags(args):
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     return _api_get("/api/data", {"ticker": ticker})
 
 
-@mcp_tool(name="get_debt_maturities", cache=FUNDAMENTAL, heavy=True)
+# min_tier="plus": premium analytics tool (see get_options_chain note).
+@mcp_tool(name="get_debt_maturities", cache=FUNDAMENTAL, heavy=True, min_tier="plus")
 def tool_get_debt_maturities(args):
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     return _api_get("/api/debt-maturities", {"ticker": ticker})
 
 
-@mcp_tool(name="get_capital_allocation", cache=FUNDAMENTAL, heavy=True)
+# min_tier="plus": premium analytics tool (see get_options_chain note).
+@mcp_tool(name="get_capital_allocation", cache=FUNDAMENTAL, heavy=True, min_tier="plus")
 def tool_get_capital_allocation(args):
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     return _api_get("/api/capital-structure", {"ticker": ticker})
 
 
 @mcp_tool(name="get_peer_comparison", cache=FUNDAMENTAL)
 def tool_get_peer_comparison(args):
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     return _api_get("/api/peers", {"ticker": ticker})
 
 
@@ -1303,7 +1313,7 @@ def tool_get_news(args):
     if args.get("query"):
         params["q"] = args["query"]
     if args.get("ticker"):
-        params["ticker"] = args["ticker"].upper().strip()
+        params["ticker"] = normalize_ticker(args.get("ticker"))
     if args.get("limit"):
         params["limit"] = str(int(args["limit"]))
     return _api_get("/api/news/search", params)
@@ -1311,14 +1321,15 @@ def tool_get_news(args):
 
 @mcp_tool(name="get_price_history", cache=MARKET)
 def tool_get_price_history(args):
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     params = {"ticker": ticker}
     if args.get("days"):
         params["days"] = str(int(args["days"]))
     return _api_get("/api/price-history", params)
 
 
-@mcp_tool(name="get_13f_holdings", cache=FUNDAMENTAL, heavy=True)
+# min_tier="plus": premium analytics tool (see get_options_chain note).
+@mcp_tool(name="get_13f_holdings", cache=FUNDAMENTAL, heavy=True, min_tier="plus")
 def tool_get_13f_holdings(args):
     fund = args["fund"].strip()
     params = {"fund": fund}
@@ -1337,9 +1348,10 @@ def tool_get_value_investing_fact(args):
     return _api_get("/api/random-ticker", params)
 
 
-@mcp_tool(name="get_valuation_history", cache=MARKET)
+# min_tier="plus": premium analytics tool (see get_options_chain note).
+@mcp_tool(name="get_valuation_history", cache=MARKET, min_tier="plus")
 def tool_get_valuation_history(args):
-    ticker = args["ticker"].upper().strip()
+    ticker = normalize_ticker(args.get("ticker"))
     params = {"ticker": ticker}
     if args.get("period"):
         params["period"] = args["period"]

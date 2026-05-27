@@ -18,4 +18,4 @@ Claude Desktop config (claude_desktop_config.json):
 }
 """
 
-__version__ = "2.0.3"
+__version__ = "2.0.4"
