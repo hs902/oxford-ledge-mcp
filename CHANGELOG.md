@@ -5,6 +5,16 @@ All notable changes to `oxford-ledge-mcp` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.0.1 (2026-07-21)
+
+### Changed (packaging only — no tool/behavior change)
+- Adopted the PEP 639 license metadata: `license = "MIT"` (SPDX expression) +
+  `license-files = ["LICENSE"]`, replacing the deprecated `license = {text = "MIT"}`
+  table and the `License :: OSI Approved :: MIT License` trove classifier (both slated
+  for removal by setuptools 2027-Feb-18). Build requirement bumped to
+  `setuptools>=77.0.0` (needed for the SPDX form). No change to any tool, arg schema,
+  or runtime behavior.
+
 ## 3.0.0 (2026-07-21)
 
 ### Removed (breaking) — gov-public-data-only surface

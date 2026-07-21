@@ -1,13 +1,18 @@
+# setuptools>=77 is required for the PEP 639 `license` SPDX string + `license-files`
+# (see 3.0.1 SPDX cleanup). Older setuptools do not understand the SPDX form.
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=77.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "oxford-ledge-mcp"
-version = "3.0.0"
+version = "3.0.1"
 description = "MCP server for Oxford Ledge financial terminal — 16 tools for stocks, SEC filings, credit data, bonds, macro indicators, and BDC holdings from Claude Desktop"
 readme = "README.md"
-license = {text = "MIT"}
+# PEP 639: SPDX expression + explicit license file (replaces the deprecated
+# `license = {text = "MIT"}` table + the `License ::` trove classifier).
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.9"
 authors = [
     {name = "Oxford Ledge", email = "contact@oxfordledge.com"},
@@ -17,7 +22,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Financial and Insurance Industry",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
