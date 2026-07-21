@@ -1,0 +1,75 @@
+name: Publish to PyPI (Trusted Publishing / OIDC)
+
+# 4B (2026-07-21): publish oxford-ledge-mcp via PyPI Trusted Publishing — no
+# long-lived API token. PyPI verifies a short-lived OIDC token minted by this
+# workflow against the Trusted Publisher configured on the project
+# (pypi.org/manage/project/oxford-ledge-mcp/settings/publishing/):
+#   Owner: hs902   Repo: oxford-ledge-mcp   Workflow: publish.yml   Environment: pypi
+#
+# Trigger: a published GitHub Release (deliberate) — tag the release to match the
+# pyproject version (e.g. v3.0.1). workflow_dispatch is kept for a manual dry-run
+# that builds + asserts + twine-checks but does NOT publish.
+#
+# The CISO pre-upload conditions are baked in as gates: the wheel must contain
+# oxford_ledge_mcp_core/ticker.py + LICENSE and must NOT contain tools_manifest.py,
+# a services/ module, or any secret-shaped file.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-check:
+    name: Build + assert clean artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+      - name: Assert clean wheel (CISO wheel-content conditions)
+        run: |
+          set -euo pipefail
+          WHL="$(ls dist/*.whl)"
+          echo "Inspecting $WHL"
+          python -m zipfile -l "$WHL" | tee /tmp/whl.txt
+          if grep -qE 'tools_manifest\.py|(^|/)services/|(^|/)\.env|(^|/)\.pypirc|tests/' /tmp/whl.txt; then
+            echo "FAIL: wheel contains a forbidden file (manifest/services/secret/tests)"; exit 1
+          fi
+          grep -q 'oxford_ledge_mcp_core/ticker\.py' /tmp/whl.txt || { echo "FAIL: ticker.py missing"; exit 1; }
+          grep -q 'LICENSE' /tmp/whl.txt || { echo "FAIL: LICENSE missing"; exit 1; }
+          echo "OK: wheel content assertions passed"
+      - name: twine check
+        run: python -m twine check dist/*
+      - name: Upload built distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI (OIDC)
+    needs: build-and-check
+    # Only publish on a real Release — workflow_dispatch stops after build-and-check.
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # REQUIRED: mint the OIDC token PyPI verifies. No API token.
+    steps:
+      - name: Download built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # No `password:` / token — Trusted Publishing uses the id-token above.
