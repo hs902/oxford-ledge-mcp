@@ -1,7 +1,9 @@
 """Structured error class for MCP tool handlers.
 
-Raised by all tool handlers so consumers (Claude Desktop) see
-consistent, structured error codes.
+Extracted 2026-04-24 from `mcp_server.py` as part of the M1 twin-
+dedup sprint. Both the in-tree and pip MCP servers raise this same
+class; consumers (Claude Desktop) see consistent error codes
+regardless of which server they're talking to.
 """
 from __future__ import annotations
 

@@ -1,5 +1,9 @@
 """Declarative tool registry — the @mcp_tool decorator + cache TTL
-tiers + the denormalized views the dispatcher reads.
+tiers + the legacy-compat views that existing dispatcher code reads.
+
+Extracted 2026-04-24 from `mcp_server.py` as part of the M1 twin-
+dedup sprint. F2 MCP Dedup Phase 4 (2026-04-24) introduced this
+pattern; M1 makes it the shared primitive both servers use.
 
 ## Usage
 
@@ -58,10 +62,11 @@ ToolHandler = Callable[[dict[str, Any]], Any]
 REGISTRY: dict[str, dict[str, Any]] = {}
 
 
-# ── Denormalized views ─────────────────────────────────────────────
-# Populated by the @mcp_tool decorator at function-definition time.
-# The dispatcher reads these directly (`name in TOOL_DISPATCH`,
-# `_TOOL_TTL.get(name, 60)`, etc.).
+# ── Denormalized legacy views ──────────────────────────────────────
+# Populated by the decorator at function-definition time. Existing
+# dispatcher code in mcp_server.py iterates these directly (via
+# `name in TOOL_DISPATCH`, `_TOOL_TTL.get(name, 60)`, etc.) — keeping
+# them in sync avoids a disruptive API break during migration.
 TOOL_DISPATCH: dict[str, ToolHandler] = {}  # name -> handler
 _TOOL_TTL: dict[str, int] = {}       # name -> int (seconds)
 _MCP_HEAVY_TOOLS: set[str] = set()  # names of heavy-concurrency tools
@@ -69,6 +74,8 @@ _MCP_HEAVY_TOOLS: set[str] = set()  # names of heavy-concurrency tools
 
 def mcp_tool(*, name: str, cache: int = MARKET, heavy: bool = False,
              min_tier: str | None = None,
+             is_write: bool = False,
+             args_schema: dict[str, Any] | None = None,
              ) -> Callable[[ToolHandler], ToolHandler]:
     """Decorator: register an MCP tool handler with its cache TTL,
     concurrency class, and optional tier-gate requirement.
@@ -84,8 +91,18 @@ def mcp_tool(*, name: str, cache: int = MARKET, heavy: bool = False,
                   (matches the HTTP route `require_min_tier` values) or
                   None for unrestricted. M2 (2026-04-24): enforced via
                   `OXFORD_LEDGE_USER_TIER` env var in the in-tree
-                  dispatcher; pip server's HTTP path enforces via
-                  session cookies unchanged.
+                  stdio dispatcher. The pip server's HTTP path
+                  (`POST /api/mcp/tool`) enforces this `min_tier` as a
+                  PRIMARY pre-dispatch gate in
+                  `routes/routes_admin_fastapi/mcp.py`
+                  (`_mcp_tool_min_tier` -> `TierGateException` 402),
+                  resolving the caller's tier from the authenticated
+                  session (anon = free, deny-by-default), in addition
+                  to the tier-gated `_api_get` backstop. CYCLE
+                  2026-05-18 (CISO P1) replaced the prior
+                  "enforces via session cookies unchanged" claim,
+                  which was fiction — the HTTP route had NO tier gate
+                  of its own before that.
 
     Raises:
         ValueError if `name` is already registered.
@@ -99,6 +116,17 @@ def mcp_tool(*, name: str, cache: int = MARKET, heavy: bool = False,
             "cache_ttl": cache,
             "heavy": heavy,
             "min_tier": min_tier,
+            # SF-MCP-WRITE Phase 1 (2026-06-12, OWNER-ratified §7.1):
+            # METADATA ONLY in this shared core. Enforcement (kill-switch,
+            # dry-run-by-default, idempotency, audit append) lives in the
+            # in-tree dispatcher (mcp_server.py _execute_write_tool) — the
+            # OSS twin gains no write capability from these fields, and the
+            # OSS write extension stays separately gated per plan §9 +
+            # feedback_public_repo_persona_vet. args_schema is the
+            # source-of-truth arg contract (§3.4); the dispatcher enforces
+            # additionalProperties:false against it.
+            "is_write": is_write,
+            "args_schema": args_schema,
         }
         # Keep the legacy views in sync. See the module docstring for
         # why they exist.
@@ -112,8 +140,8 @@ def mcp_tool(*, name: str, cache: int = MARKET, heavy: bool = False,
 
 
 # Tier ordering for min_tier comparisons. Lower index = cheaper tier.
-# Values align with the hosted Oxford Ledge service's tier-acceptance
-# set. Unknown tier strings compare as "insufficient for anything".
+# Values align with the HTTP-side `middleware.auth.require_min_tier`
+# acceptance set. Unknown tier strings compare as "insufficient for anything".
 TIER_ORDER = ("learner", "analyst", "plus", "pro", "investor_plus")
 
 

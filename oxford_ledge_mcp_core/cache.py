@@ -1,5 +1,9 @@
 """In-process response cache for MCP tool handlers.
 
+Extracted 2026-04-24 from `mcp_server.py` as part of the M1 twin-
+dedup sprint. Both the in-tree and pip MCP servers now share the
+same cache primitives.
+
 ## Design
 
 - Key = `tool_name + MD5(sorted_args_json)[:16]`. Deterministic
@@ -71,7 +75,8 @@ def cache_set(
     """Store a tool result in the cache. No-op if TTL is 0.
 
     LRU-ish eviction: if the cache exceeds `max_size`, drop the entry
-    with the earliest expiry timestamp.
+    with the earliest expiry timestamp. Matches the pre-extraction
+    behavior in mcp_server.py.
     """
     ttl = ttl_fn(tool_name)
     if ttl == 0:

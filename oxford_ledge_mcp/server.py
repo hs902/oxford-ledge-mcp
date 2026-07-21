@@ -11,9 +11,10 @@ Two modes:
      The other ~30 tools raise ToolError.API_REQUIRED in this mode and
      direct the user to set OXFORD_LEDGE_URL.
 
-Standalone mode (no OXFORD_LEDGE_URL) covers only the keyless tools
-described above; the rest return ToolError.API_REQUIRED directing the
-user to set OXFORD_LEDGE_URL.
+Y1 (2026-04-24): yfinance was removed from this package. Previous
+"standalone mode" covered 18 tools via yfinance; now standalone covers
+only the keyless-API tools (see above). See MIGRATING.md for upgrade
+notes.
 
 Run as stdio MCP server for Claude Desktop:
     oxford-ledge-mcp
@@ -29,9 +30,8 @@ import time as _time
 import urllib.request
 import urllib.parse
 
-# Add the package parent dir to sys.path so the sibling
-# oxford_ledge_mcp_core subpackage imports reliably when this
-# module is run as a script.
+# M1 Phase 1b: add parent dir to sys.path so the sibling
+# oxford_ledge_mcp_core subpackage imports reliably.
 _pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _pkg_parent not in sys.path:
     sys.path.insert(0, _pkg_parent)
@@ -48,17 +48,33 @@ _logger = logging.getLogger("oxford_ledge.mcp")
 # e.g. OXFORD_LEDGE_URL=https://www.oxfordledge.com or http://localhost:10000
 _API_URL = os.environ.get("OXFORD_LEDGE_URL", "").rstrip("/")
 
+# MONETIZE-2 (#121): the caller's Oxford Ledge API key. Without it this client is
+# ANONYMOUS against prod — every tier-gated tool 402s and no call is attributable
+# to an account, so a paying customer running the published package got the free
+# tier and the agent-API meter counted nothing. Optional by design: the keyless
+# public-lineage tools (SEC EDGAR / FINRA / Treasury) keep working with no key,
+# which is the redistribution posture we shipped the clean core for.
+# The key rides in the `x-api-key` header (never a query string — query strings
+# land in access logs and browser history).
+_API_KEY = os.environ.get("OXFORD_LEDGE_API_KEY", "").strip()
+
 # ── Per-session concurrency limits ────────────────────────────────────────────
 _MCP_MAX_CONCURRENT = 5
 _MCP_HEAVY_MAX_CONCURRENT = 2
 _mcp_semaphore = threading.Semaphore(_MCP_MAX_CONCURRENT)
 _mcp_heavy_semaphore = threading.Semaphore(_MCP_HEAVY_MAX_CONCURRENT)
 
-# Shared primitives (_MCP_HEAVY_TOOLS, _TOOL_TTL, cache, ToolError)
-# come from the `oxford_ledge_mcp_core` subpackage. Tool registrations
-# are done via @mcp_tool decorators on each `def tool_X(args):`
-# function, which populate the core's REGISTRY at module-import time
-# (36 tools).
+# ── M1 Phase 1b (2026-04-24): primitives moved to oxford_ledge_mcp_core ───
+# Before Phase 1b, this file had its own copies of _MCP_HEAVY_TOOLS,
+# _TOOL_TTL, _cache_key/_get/_set, and the ToolError class — duplicating
+# the in-tree `mcp_server.py` equivalents. They drifted. Phase 1a put
+# the primitives in the shared `oxford_ledge_mcp_core` subpackage; this
+# phase makes the pip server consume them too.
+#
+# Tool registrations are now done via @mcp_tool decorators on each
+# `def tool_X(args):` function, which populate the core's REGISTRY at
+# module-import time. Claude Desktop sees the same 36 tools it saw
+# before; behavior is byte-equivalent per contract.
 
 _MCP_HEAVY_TOOLS: set = set()  # populated by @mcp_tool(heavy=True)
 
@@ -74,16 +90,12 @@ from oxford_ledge_mcp_core import (
     TOOL_DISPATCH,
     _TOOL_TTL,
     ToolError,
+    normalize_ticker,
     cache_key as _cache_key,
     cache_get as _cache_get_core,
     cache_set as _cache_set_core,
     clear_cache as _clear_cache_core,
 )
-# F5 (2026-05-27): ticker-input normalization helper. Routes the
-# `args["ticker"].upper().strip()` callsites through one helper so
-# missing-key inputs surface as ToolError.BAD_INPUT (downstream
-# validators) instead of raw KeyError.
-from oxford_ledge_mcp_core.ticker import normalize_ticker
 _CACHE_TTL_MARKET = MARKET
 _CACHE_TTL_FUNDAMENTAL = FUNDAMENTAL
 _CACHE_TTL_STATIC = STATIC
@@ -104,11 +116,12 @@ def _cache_set(tool_name, args, result):
     )
 
 
-
-# Tools that need market/fundamentals data route through `_api_get()`
-# against `OXFORD_LEDGE_URL`. In standalone mode (no OXFORD_LEDGE_URL)
-# those tools return `ToolError.API_REQUIRED`; the keyless tools still
-# work.
+# ── Y1 (2026-04-24): yfinance excision ────────────────────────────────────
+# The previous `_get_yf()` lazy loader + `import yfinance` is removed. All
+# tools that previously relied on it now route through `_api_get()` against
+# `OXFORD_LEDGE_URL`. Standalone-mode users get `ToolError.API_REQUIRED`
+# for the 11 previously-yfinance tools. See docs/plans/YFINANCE_EXCISION.md
+# for rationale + MIGRATING.md for the user-facing impact.
 
 
 def _log(msg):
@@ -117,8 +130,29 @@ def _log(msg):
 
 # ── Tool definitions (36 tools) ──────────────────────────────────────────────
 #
-# The TOOLS list below is the tool catalog; the @mcp_tool decorators
-# on each handler register them into the core REGISTRY at import time.
+# NOTE 2026-05-07: read-only consumers (the public /mcp catalog route, SSR
+# renderer) MUST import from the manifest module, NOT from here — importing
+# this server.py fires the @mcp_tool decorators below, which collide with
+# the root mcp_server.py's decorators when both modules co-exist in
+# sys.modules (CI run 67918257844).
+#
+# NOTE 2026-07-09 (#93 consolidation): tools_manifest.py is now GENERATED
+# from the root mcp_tool_definitions.py via tools/gen_mcp_tools_manifest.py
+# — do NOT hand-mirror edits from here into it anymore. THIS list is
+# different in kind: it advertises the proxy handlers this pip package
+# actually ships, a SUBSET of the monolith's dispatch, and several
+# entries still carry pre-rename tool names (get_stock_quote vs
+# batch_get_ticker_data, etc.).
+#
+# NOTE 2026-07-10 (#93 follow-on): this module is NO LONGER imported by the
+# live web service. /api/mcp/tool + /api/mcp/tools now dispatch through the
+# IN-TREE mcp_server (51 canonical tools, matching the public catalog) —
+# routes/routes_admin_fastapi/mcp.py. This file serves ONLY the external
+# stdio pip-package path (Claude Desktop et al. proxying REST endpoints via
+# OXFORD_LEDGE_URL). Rewriting these 36 legacy handlers as a thin
+# /api/mcp/tool passthrough bridge is the OWNER-gated package-republish
+# follow-on (task_queue #93); the drift gate deliberately does not equate
+# this list with the manifest until that repair ships.
 
 TOOLS = [
     # ── Core company data (API-mode via OXFORD_LEDGE_URL; Y1 2026-04-24) ──
@@ -378,21 +412,6 @@ TOOLS = [
     },
     # ── API-mode tools (require OXFORD_LEDGE_URL) ──
     {
-        "name": "get_company_data",
-        "description": (
-            "Get key financials, valuation multiples, and current price for a "
-            "stock ticker. Returns price, P/E, EV/EBITDA, market cap, dividend "
-            "yield, 52-week range, and more. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL, MSFT)"}
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
         "name": "search_company",
         "description": (
             "Fuzzy search for companies by name, ticker, or industry. Returns "
@@ -404,20 +423,6 @@ TOOLS = [
                 "query": {"type": "string", "description": "Search query (company name, ticker, or industry)"}
             },
             "required": ["query"],
-        },
-    },
-    {
-        "name": "get_company_profile",
-        "description": (
-            "Get company profile including business description, CEO, founding year, "
-            "headquarters, employee count, sector, and industry classification. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL)"}
-            },
-            "required": ["ticker"],
         },
     },
     {
@@ -433,18 +438,6 @@ TOOLS = [
                 "event_type": {"type": "string", "description": "Optional filter: acquisition, divestiture, executive_change, restructuring, dividend, or ALL"},
             },
             "required": ["ticker"],
-        },
-    },
-    {
-        "name": "get_market_indicators",
-        "description": (
-            "Get current market indicators: S&P 500, Dow Jones, NASDAQ, VIX, "
-            "10-Year Treasury yield, gold, oil, bitcoin, and other key benchmarks "
-            "with daily change, YTD, and year-over-year performance. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
         },
     },
     {
@@ -471,22 +464,6 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {},
-        },
-    },
-    {
-        "name": "calculate_intrinsic_value",
-        "description": (
-            "Calculate intrinsic value per share using DCF, EPV, and/or Graham "
-            "models. Returns fair value estimates, margin of safety vs current "
-            "price, and the inputs used in each model. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL)"},
-                "method": {"type": "string", "enum": ["dcf", "epv", "graham", "all"], "description": "Valuation method to use (default: all)"},
-            },
-            "required": ["ticker"],
         },
     },
     {
@@ -535,22 +512,6 @@ TOOLS = [
         },
     },
     {
-        "name": "get_peer_comparison",
-        "description": (
-            "Get comparative valuation and financial metrics for a stock vs "
-            "its peers. Returns P/E, EV/EBITDA, margins, growth, and other "
-            "key metrics side-by-side. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL)"},
-                "peers": {"type": "array", "items": {"type": "string"}, "description": "Optional list of peer tickers to compare against"},
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
         "name": "get_news",
         "description": (
             "Search the Oxford Ledge news archive for headlines with sentiment "
@@ -563,21 +524,6 @@ TOOLS = [
                 "ticker": {"type": "string", "description": "Filter to a specific ticker (e.g. AAPL)"},
                 "limit": {"type": "number", "description": "Max results to return (default 25, max 100)"},
             },
-        },
-    },
-    {
-        "name": "get_price_history",
-        "description": (
-            "Get OHLCV price history for a ticker from the Oxford Ledge "
-            "database. Returns date, open, high, low, close, and volume. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL)"},
-                "days": {"type": "number", "description": "Number of days of history (default 365)"},
-            },
-            "required": ["ticker"],
         },
     },
     {
@@ -612,21 +558,6 @@ TOOLS = [
         },
     },
     {
-        "name": "get_valuation_history",
-        "description": (
-            "Get historical valuation multiples (P/E, EV/EBITDA, P/B, P/S) for a "
-            "ticker over time. Identifies if a stock is historically cheap or expensive. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL)"},
-                "period": {"type": "string", "enum": ["1y", "2y", "5y"], "description": "Historical period (default: 5y)"},
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
         "name": "get_economic_calendar",
         "description": (
             "Get upcoming economic events and data releases including "
@@ -658,7 +589,11 @@ def _api_get(path, params=None, timeout=15):
         qs = "&".join(f"{k}={urllib.parse.quote(str(v))}" for k, v in params.items() if v is not None)
         if qs:
             url += f"?{qs}"
-    req = urllib.request.Request(url, headers={"User-Agent": "OxfordLedgeMCP/1.0"})
+    _headers = {"User-Agent": "OxfordLedgeMCP/1.0"}
+    if _API_KEY:
+        # Authenticates + meters the call against the key's account (#120/#121).
+        _headers["x-api-key"] = _API_KEY
+    req = urllib.request.Request(url, headers=_headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
@@ -668,6 +603,40 @@ def _api_get(path, params=None, timeout=15):
             body = e.read().decode("utf-8")[:500]
         except Exception:
             pass
+        # MONETIZE-2 (#121): give the AGENT an error it can act on. Every failure
+        # here used to read DATA_UNAVAILABLE — so a 402 (this account's tier does
+        # not include the tool) and a 401 (no/!valid key) both told the model "the
+        # data isn't available", which is false and un-actionable: the model
+        # retried, or told the user the filing didn't exist. Payment and auth are
+        # not data problems.
+        if e.code == 402:
+            raise ToolError(
+                ToolError.AUTH_REQUIRED,
+                "This tool requires a paid Oxford Ledge tier. "
+                + ("Your API key's plan does not include it — see "
+                   "https://www.oxfordledge.com/pricing."
+                   if _API_KEY else
+                   "Set OXFORD_LEDGE_API_KEY (create a key at "
+                   "https://www.oxfordledge.com/account) — without one this client "
+                   "is anonymous and only the free public-data tools work."),
+            )
+        if e.code in (401, 403):
+            raise ToolError(
+                ToolError.AUTH_REQUIRED,
+                "Oxford Ledge rejected the credentials for this tool "
+                f"({e.code}). Check OXFORD_LEDGE_API_KEY is set and not revoked.",
+            )
+        if e.code == 429:
+            retry_after = None
+            try:
+                retry_after = int(e.headers.get("Retry-After") or 0) or None
+            except Exception:
+                pass
+            raise ToolError(
+                ToolError.RATE_LIMITED,
+                "Oxford Ledge rate limit reached for this key.",
+                retry_after=retry_after,
+            )
         raise ToolError(ToolError.DATA_UNAVAILABLE, f"API returned {e.code}: {body}")
     except urllib.error.URLError as e:
         raise ToolError(ToolError.DATA_UNAVAILABLE, f"Cannot reach Oxford Ledge API at {_API_URL}: {e.reason}")
@@ -692,8 +661,8 @@ def tool_get_stock_quote(args):
 
     Y1 (2026-04-24): migrated from yfinance to Oxford Ledge API.
     Requires OXFORD_LEDGE_URL — standalone mode no longer supports this
-    tool because our data pipeline (FMP + SEC EDGAR + Finnhub) lives
-    server-side.
+    tool because the quote/valuation data lives server-side in Oxford
+    Ledge's licensed hosted service.
     """
     ticker = normalize_ticker(args.get("ticker"))
     data = _api_get("/api/data", {"ticker": ticker})
@@ -790,7 +759,8 @@ def tool_get_cash_flow(args):
 @mcp_tool(name="get_analyst_recommendations", cache=FUNDAMENTAL)
 def tool_get_analyst_recommendations(args):
     """Analyst target prices + consensus recommendation.
-    Y1 (2026-04-24): now requires OXFORD_LEDGE_URL (routes via FMP)."""
+    Y1 (2026-04-24): now requires OXFORD_LEDGE_URL (routes via the Oxford
+    Ledge hosted service)."""
     ticker = normalize_ticker(args.get("ticker"))
     data = _api_get("/api/analyst-estimates", {"ticker": ticker})
     if not isinstance(data, dict):
@@ -940,9 +910,11 @@ def tool_get_insider_trades(args):
     return {"ticker": ticker, "trades": trades}
 
 
-# min_tier="plus": premium analytics tool. Mirrors canonical in-tree
-# per-tool tier table. Standalone stdio mode is not tier-enforced;
-# API mode (OXFORD_LEDGE_URL set) enforces tier server-side.
+# min_tier="plus": mirrors the in-tree mcp_server.py canonical
+# per-tool tier table (M2 2026-04-24). Premium analytics tool, NOT
+# free SEC/EDGAR/FRED/Treasury/FINRA data (sf_monetization_v3).
+# Enforced on the HTTP path by routes/routes_admin_fastapi/mcp.py
+# (CISO P1 2026-05-18) and on the stdio path by the env-var check.
 @mcp_tool(name="get_options_chain", cache=FUNDAMENTAL, min_tier="plus")
 def tool_get_options_chain(args):
     """Options chain with Greeks.
@@ -1231,21 +1203,9 @@ def tool_get_short_interest(args):
 # ── API-mode tool implementations ────────────────────────────────────────────
 # These tools proxy to a running Oxford Ledge instance.
 
-@mcp_tool(name="get_company_data", cache=MARKET)
-def tool_get_company_data(args):
-    ticker = normalize_ticker(args.get("ticker"))
-    return _api_get(f"/api/data", {"ticker": ticker})
-
-
 @mcp_tool(name="search_company", cache=FUNDAMENTAL)
 def tool_search_company(args):
     return _api_get("/api/fund-search", {"q": args["query"]})
-
-
-@mcp_tool(name="get_company_profile", cache=FUNDAMENTAL)
-def tool_get_company_profile(args):
-    ticker = normalize_ticker(args.get("ticker"))
-    return _api_get(f"/api/data", {"ticker": ticker})
 
 
 @mcp_tool(name="get_corporate_events", cache=FUNDAMENTAL)
@@ -1255,11 +1215,6 @@ def tool_get_corporate_events(args):
     if args.get("event_type"):
         params["event_type"] = args["event_type"]
     return _api_get("/api/corporate-events", params)
-
-
-@mcp_tool(name="get_market_indicators", cache=MARKET)
-def tool_get_market_indicators(args):
-    return _api_get("/api/data-status")
 
 
 @mcp_tool(name="search_bdc_borrower", cache=FUNDAMENTAL)
@@ -1272,39 +1227,26 @@ def tool_get_bdc_list(args):
     return _api_get("/api/bdc/list")
 
 
-@mcp_tool(name="calculate_intrinsic_value", cache=NEVER)
-def tool_calculate_intrinsic_value(args):
-    ticker = normalize_ticker(args.get("ticker"))
-    params = {"ticker": ticker}
-    if args.get("method"):
-        params["method"] = args["method"]
-    return _api_get("/api/cross-validate", params)
-
-
 @mcp_tool(name="get_anomaly_flags", cache=MARKET)
 def tool_get_anomaly_flags(args):
     ticker = normalize_ticker(args.get("ticker"))
     return _api_get("/api/data", {"ticker": ticker})
 
 
-# min_tier="plus": premium analytics tool (see get_options_chain note).
+# min_tier="plus": canonical premium analytics (see get_options_chain
+# note above). Mirrors mcp_server.py; sf_monetization_v3-compliant.
 @mcp_tool(name="get_debt_maturities", cache=FUNDAMENTAL, heavy=True, min_tier="plus")
 def tool_get_debt_maturities(args):
     ticker = normalize_ticker(args.get("ticker"))
     return _api_get("/api/debt-maturities", {"ticker": ticker})
 
 
-# min_tier="plus": premium analytics tool (see get_options_chain note).
+# min_tier="plus": canonical premium analytics (see get_options_chain
+# note above). Mirrors mcp_server.py; sf_monetization_v3-compliant.
 @mcp_tool(name="get_capital_allocation", cache=FUNDAMENTAL, heavy=True, min_tier="plus")
 def tool_get_capital_allocation(args):
     ticker = normalize_ticker(args.get("ticker"))
     return _api_get("/api/capital-structure", {"ticker": ticker})
-
-
-@mcp_tool(name="get_peer_comparison", cache=FUNDAMENTAL)
-def tool_get_peer_comparison(args):
-    ticker = normalize_ticker(args.get("ticker"))
-    return _api_get("/api/peers", {"ticker": ticker})
 
 
 @mcp_tool(name="get_news", cache=MARKET)
@@ -1319,16 +1261,8 @@ def tool_get_news(args):
     return _api_get("/api/news/search", params)
 
 
-@mcp_tool(name="get_price_history", cache=MARKET)
-def tool_get_price_history(args):
-    ticker = normalize_ticker(args.get("ticker"))
-    params = {"ticker": ticker}
-    if args.get("days"):
-        params["days"] = str(int(args["days"]))
-    return _api_get("/api/price-history", params)
-
-
-# min_tier="plus": premium analytics tool (see get_options_chain note).
+# min_tier="plus": canonical premium analytics (see get_options_chain
+# note above). Mirrors mcp_server.py; sf_monetization_v3-compliant.
 @mcp_tool(name="get_13f_holdings", cache=FUNDAMENTAL, heavy=True, min_tier="plus")
 def tool_get_13f_holdings(args):
     fund = args["fund"].strip()
@@ -1348,16 +1282,6 @@ def tool_get_value_investing_fact(args):
     return _api_get("/api/random-ticker", params)
 
 
-# min_tier="plus": premium analytics tool (see get_options_chain note).
-@mcp_tool(name="get_valuation_history", cache=MARKET, min_tier="plus")
-def tool_get_valuation_history(args):
-    ticker = normalize_ticker(args.get("ticker"))
-    params = {"ticker": ticker}
-    if args.get("period"):
-        params["period"] = args["period"]
-    return _api_get("/api/price-history", params)
-
-
 @mcp_tool(name="get_economic_calendar", cache=MARKET)
 def tool_get_economic_calendar(args):
     params = {}
@@ -1366,9 +1290,35 @@ def tool_get_economic_calendar(args):
     return _api_get("/api/macro-events", params)
 
 
-# Tool registrations are via the @mcp_tool decorators on each tool
-# function above; the dispatcher reads the core's TOOL_DISPATCH view
-# (imported above).
+# TOOL_MAP was formerly a 36-entry dict literal here. As of M1
+# Phase 1b (2026-04-24), registrations are via @mcp_tool decorators
+# on each tool function above; the dispatcher reads the core's
+# TOOL_DISPATCH view (imported above).
+# ── Removed-tool guidance (2.1.0 FMP-removal) ────────────────────────────────
+# The 7 vendor-data-lineage tools removed in 2.1.0. A client that calls a removed
+# name gets a structured migration pointer instead of a bare "Unknown tool", so an
+# agent can self-correct to the SEC-XBRL / hosted replacement. See CHANGELOG.md +
+# MIGRATING.md. (2.0.4 stays installable on PyPI for anyone pinning the old tools.)
+_REMOVED_TOOLS = {
+    "calculate_intrinsic_value": "removed in 2.1.0 (vendor-fed). Use `get_fundamentals` for SEC-XBRL statements; the DCF/EPV/Graham signal `ol_intrinsic_value` is available via the hosted Oxford Ledge MCP server.",
+    "get_company_data": "removed in 2.1.0 (vendor-fed). Use `get_fundamentals` (SEC XBRL) or `search_company`.",
+    "get_company_profile": "removed in 2.1.0 (vendor-fed). Use `get_business_summary` (SEC 10-K Item 1) or `search_company`.",
+    "get_market_indicators": "removed in 2.1.0 (vendor-fed). Use `get_economic_calendar`, `get_yield_curve`, or `get_fred_data`.",
+    "get_peer_comparison": "removed in 2.1.0 (vendor-fed). Fetch `get_fundamentals` per ticker; `ol_peer_fundamentals` is available via the hosted Oxford Ledge MCP server.",
+    "get_price_history": "removed in 2.1.0 (vendor-fed price data has no distributable source).",
+    "get_valuation_history": "removed in 2.1.0 (vendor-fed).",
+}
+
+
+def _unknown_tool_text(name: str) -> str:
+    """Message for an unrecognized tool name. A known-removed tool gets a 2.1.0
+    migration pointer; anything else gets the generic form."""
+    hint = _REMOVED_TOOLS.get(name)
+    if hint:
+        return f"Tool '{name}' was {hint}"
+    return f"Unknown tool: {name}"
+
+
 # ── Concurrency-limited tool execution ───────────────────────────────────────
 
 def _execute_tool_with_limits(tool_name, args):
@@ -1435,7 +1385,7 @@ def handle_request(req):
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "oxford-ledge-mcp", "version": "2.0.3"},
+                "serverInfo": {"name": "oxford-ledge-mcp", "version": "2.0.2"},
             },
         }
 
@@ -1456,7 +1406,7 @@ def handle_request(req):
             return {
                 "jsonrpc": "2.0", "id": req_id,
                 "result": {
-                    "content": [{"type": "text", "text": f"Unknown tool: {tool_name}"}],
+                    "content": [{"type": "text", "text": _unknown_tool_text(tool_name)}],
                     "isError": True,
                 },
             }
@@ -1489,11 +1439,11 @@ def main():
     """Run the MCP server on stdin/stdout."""
     mode = "API" if _API_URL else "standalone"
     tool_count = len(TOOLS)
-    _log(f"Oxford Ledge MCP Server v2.0.3 starting ({tool_count} tools, {mode} mode)...")
+    _log(f"Oxford Ledge MCP Server v2.0.2 starting ({tool_count} tools, {mode} mode)...")
     if _API_URL:
         _log(f"  API endpoint: {_API_URL}")
     else:
-        _log("  Tip: Set OXFORD_LEDGE_URL for all 36 tools. Standalone mode has 18 tools available.")
+        _log("  Tip: Set OXFORD_LEDGE_URL for all 36 tools. Standalone mode serves only the keyless public-API tools (SEC EDGAR, FINRA TRACE; FRED with FRED_API_KEY).")
 
     # Try to use the mcp package if available
     try:
@@ -1516,7 +1466,7 @@ def main():
         @server.call_tool()
         async def call_tool(name: str, arguments: dict):
             if name not in TOOL_DISPATCH:
-                return [TextContent(type="text", text=f"Unknown tool: {name}")]
+                return [TextContent(type="text", text=_unknown_tool_text(name))]
             try:
                 result = _execute_tool_with_limits(name, arguments)
                 text = json.dumps(result, indent=2, default=str)

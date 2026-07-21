@@ -5,6 +5,35 @@ All notable changes to `oxford-ledge-mcp` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.1.0 (2026-07-21)
+
+### Removed (breaking)
+- **7 vendor-data-lineage tools** removed so the package's default tool
+  surface is free of commercial-vendor data lineage (a redistributability
+  tightening — the removed tools proxied FMP/Finnhub-derived data and have
+  no distributable source):
+  `calculate_intrinsic_value`, `get_company_data`, `get_company_profile`,
+  `get_market_indicators`, `get_peer_comparison`, `get_price_history`,
+  `get_valuation_history`.
+  Removing public tools is backward-incompatible. **`2.0.4` remains
+  installable on PyPI** — if you depend on any of the above, pin
+  `oxford-ledge-mcp==2.0.4`. See `MIGRATING.md` for replacements.
+
+### Changed
+- Calling a removed tool now returns a **structured migration pointer**
+  (naming the SEC-XBRL / hosted replacement) instead of a bare
+  `Unknown tool: <name>` — so an agent can self-correct.
+- Package metadata: the description's tool count is corrected `36 → 29`
+  (the live `tools/list` surface), and the `Repository` URL now points at
+  the public `github.com/hs902/oxford-ledge-mcp` (was the private monorepo).
+
+### Unchanged
+- The `2.0.4` ticker-normalization behavior (`normalize_ticker`) is
+  preserved on every surviving tool — a missing/`null` `ticker` still
+  surfaces as a structured `ToolError`, never a raw `KeyError`.
+- All surviving tools keep their arg names, return shapes, and MCP wire
+  format.
+
 ## 2.0.4 (2026-05-27)
 
 ### Added
@@ -29,10 +58,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Improved error message** for missing-`ticker` inputs. Previously a
   request omitting the required `ticker` arg surfaced as a bare
   `KeyError: 'ticker'` (`ToolError.UNKNOWN`). It now reaches the
-  existing empty-string validators and surfaces as
-  `ToolError.BAD_INPUT` with a friendly message naming the missing
-  field. This is the only observable behavior change in 2.0.4 and is
-  strictly improving.
+  existing empty-string validators and surfaces as a structured
+  `ToolError` with a friendly message. This is the only observable
+  behavior change in 2.0.4 and is strictly improving.
 
 ### Fixed
 - README install instruction typo: `pip install oxfordledge-mcp` →

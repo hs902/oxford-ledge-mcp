@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oxford-ledge-mcp"
-version = "2.0.4"
-description = "MCP server for Oxford Ledge financial terminal — 36 tools for stocks, SEC filings, credit data, bonds, macro indicators, and BDC holdings from Claude Desktop"
+version = "2.1.0"
+description = "MCP server for Oxford Ledge financial terminal — 29 tools for stocks, SEC filings, credit data, bonds, macro indicators, and BDC holdings from Claude Desktop"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"

@@ -4,8 +4,9 @@ Install: pip install oxford-ledge-mcp
 Usage:   oxford-ledge-mcp (runs as stdio MCP server)
 
 Two modes:
-  1. Standalone: 18 tools via yfinance + free APIs (no setup needed)
-  2. API mode:   All 36 tools via Oxford Ledge instance
+  1. Standalone: only the keyless public-API tools (SEC EDGAR, FINRA TRACE;
+     FRED with a free FRED_API_KEY). The other ~30 tools raise API_REQUIRED.
+  2. API mode:   All 36 tools via an Oxford Ledge instance
      Set OXFORD_LEDGE_URL=https://www.oxfordledge.com
 
 Claude Desktop config (claude_desktop_config.json):
@@ -18,4 +19,4 @@ Claude Desktop config (claude_desktop_config.json):
 }
 """
 
-__version__ = "2.0.4"
+__version__ = "2.1.0"  # keep in sync with pyproject.toml [project].version
