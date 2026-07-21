@@ -1,11 +1,11 @@
 # Oxford Ledge MCP Server
 
 > **Last updated:** 2026-07-21
-> **Version:** 2.1.0 (clean-core: vendor-fed tools removed)
+> **Version:** 3.0.0 (gov-public-data-only surface)
 
 Financial data tools for [Claude Desktop](https://claude.ai/download) via the [Model Context Protocol](https://modelcontextprotocol.io/).
 
-**29 tools** for stocks, SEC filings, bonds, credit data, BDC holdings, macro indicators, and more. This is an MIT-licensed, Oxford-Ledge-authored client: several tools **proxy the Oxford Ledge hosted service (a licensed data service) at runtime** rather than bundling any vendor data. **Best experienced with `OXFORD_LEDGE_URL` set** — routes through a running Oxford Ledge instance whose pipeline draws on SEC EDGAR, FRED, FINRA TRACE, and licensed commercial feeds. A small subset of tools also works standalone against keyless public APIs.
+**16 tools** for SEC filings & fundamentals, institutional & insider ownership, corporate bonds, BDC/private-credit holdings, and macro rates. As of 3.0.0 this is a **gov-public-data-only** package: every tool is backed by **SEC EDGAR, FRED, U.S. Treasury, or FINRA TRACE** (public data) — no commercial-vendor feed anywhere in the surface. MIT-licensed, Oxford-Ledge-authored. **6 tools run fully standalone** against keyless public APIs; the other 10 route SEC/gov data through a running Oxford Ledge instance via `OXFORD_LEDGE_URL`. (Vendor-fed quotes/estimates/screens/news are no longer in the package — use the hosted Oxford Ledge MCP server for those.)
 
 **Upgrading from 1.x / 2.0.0 / 2.0.1?** See [MIGRATING.md](./MIGRATING.md). Short version: tool names, arg schemas, and config are unchanged across the 2.x series. Two substantive changes:
 
@@ -50,7 +50,7 @@ falls back to the built-in stdio loop. Either way, requires Python ≥ 3.9.
 
 This server runs in one of three modes — pick the one that matches your Oxford Ledge subscription state. **The pip package is the user-distributed canonical path; the in-tree dev server is for Oxford Ledge contributors only.**
 
-### 1. API mode (recommended) — all 29 tools
+### 1. API mode (recommended) — all 16 tools
 
 For full functionality, point the server at a running Oxford Ledge instance. Add to your `claude_desktop_config.json`:
 
@@ -97,7 +97,7 @@ The six standalone tools split by their data source:
 - **4 fully keyless** — `get_fundamentals` + `get_sec_filings` (direct SEC EDGAR) and `search_bonds` + `get_bond_data` (FINRA TRACE). No env var of any kind.
 - **2 require `FRED_API_KEY`** — `get_yield_curve` and `get_fred_data` call FRED directly and raise `ToolError.API_REQUIRED` with a "Set FRED_API_KEY" message if the key is unset. Get a free key at [fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html).
 
-The other 23 tools raise `ToolError.API_REQUIRED` with a pointer to set `OXFORD_LEDGE_URL` when called in standalone mode. **This is a change from 1.x / 2.0.0**, which used yfinance to cover more standalone tools. That path was removed in 2.0.1 — see [MIGRATING.md](./MIGRATING.md) for the rationale.
+The other 10 tools raise `ToolError.API_REQUIRED` with a pointer to set `OXFORD_LEDGE_URL` when called in standalone mode. **This is a change from 1.x / 2.0.0**, which used yfinance to cover more standalone tools. That path was removed in 2.0.1 — see [MIGRATING.md](./MIGRATING.md) for the rationale.
 
 ### 3. Dev mode — in-tree from an Oxford Ledge checkout
 
@@ -123,84 +123,66 @@ After editing config, restart Claude Desktop. You'll see the tools available.
 
 ---
 
-## Available tools (29)
+## Available tools (16)
 
-`Mode` column: **S** = works in standalone (no OXFORD_LEDGE_URL required), **A** = API mode only.
+`Mode` column: **S** = works in standalone (no OXFORD_LEDGE_URL required), **A** = API mode only. As of 3.0.0 **every tool is gov-public-data** (SEC EDGAR / FRED / Treasury / FINRA TRACE).
 
-> **Removed in 2.1.0** (vendor-data lineage; pin `oxford-ledge-mcp==2.0.4` if you
-> need them): `get_company_data`, `get_company_profile`, `get_market_indicators`,
-> `get_valuation_history`, `calculate_intrinsic_value`, `get_price_history`,
-> `get_peer_comparison`. See [CHANGELOG.md](./CHANGELOG.md) / [MIGRATING.md](./MIGRATING.md).
+> **Removed — vendor-data lineage** (pin an older version if you need them):
+> **3.0.0** (keyless-public cut): `get_stock_quote`, `get_financials`, `get_balance_sheet`,
+> `get_cash_flow`, `get_analyst_recommendations`, `get_company_info`, `compare_stocks`,
+> `screen_stocks`, `get_anomaly_flags`, `get_options_chain`, `get_economic_calendar`,
+> `get_news`, `search_company` (pin `==2.1.0`). **2.1.0** (FMP-removal): `get_company_data`,
+> `get_company_profile`, `get_market_indicators`, `get_valuation_history`,
+> `calculate_intrinsic_value`, `get_price_history`, `get_peer_comparison` (pin `==2.0.4`).
+> These remain available via the hosted Oxford Ledge MCP server. See
+> [CHANGELOG.md](./CHANGELOG.md) / [MIGRATING.md](./MIGRATING.md).
 
-### Stocks & quotes (4 tools)
-
-| Tool | Mode | Description |
-|------|:-:|-------------|
-| `get_stock_quote` | A | Current price, P/E, EV/EBITDA, market cap, beta |
-| `search_company` | A | Fuzzy search by name, ticker, or industry |
-| `compare_stocks` | A | Side-by-side comparison of 2-5 stocks |
-| `get_company_info` | A | Sector, industry, employees, description |
-
-### Fundamentals & valuation (7 tools)
+### SEC fundamentals & filings (4 tools)
 
 | Tool | Mode | Description |
 |------|:-:|-------------|
 | `get_fundamentals` | **S** | 10-year XBRL financials from SEC EDGAR |
-| `get_financials` | A | Income statement (revenue, net income, EBITDA) |
-| `get_balance_sheet` | A | Assets, liabilities, equity, debt, cash |
-| `get_cash_flow` | A | Operating, investing, financing cash flows, FCF |
-| `get_capital_allocation` | A | 10-year buyback / dividend / debt scorecard |
-| `get_debt_maturities` | A | Maturity schedule from 10-K footnotes |
-| `get_anomaly_flags` | A | 15 automated red-flag checks |
-
-### News, events & estimates (8 tools)
-
-| Tool | Mode | Description |
-|------|:-:|-------------|
-| `get_news` | A | News archive search with sentiment scores |
-| `get_corporate_events` | A | M&A, executive changes, restructurings |
-| `get_economic_calendar` | A | FOMC, CPI, GDP, jobs-report dates |
-| `get_analyst_recommendations` | A | Buy/hold/sell counts, price targets |
-| `get_holders` | A | Top institutional shareholders |
-| `get_13f_holdings` | A | Institutional 13F holdings from EDGAR |
-| `get_insider_trades` | A | Recent insider buy/sell transactions |
-| `get_short_interest` | A | Short percent of float, days to cover |
-
-### Options & screening (2 tools)
-
-| Tool | Mode | Description |
-|------|:-:|-------------|
-| `get_options_chain` | A | Calls and puts with expiry filtering |
-| `screen_stocks` | A | Filter by sector, market cap, P/E, dividend yield |
-
-### SEC filings (1 tool)
-
-| Tool | Mode | Description |
-|------|:-:|-------------|
 | `get_sec_filings` | **S** | Recent 10-K, 10-Q, 8-K filings from EDGAR |
+| `get_capital_allocation` | A | 10-year buyback / dividend / debt scorecard (SEC XBRL) |
+| `get_debt_maturities` | A | Maturity schedule from 10-K footnotes |
 
-### Bonds — FINRA TRACE (2 tools)
+### Ownership & insiders — SEC (3 tools)
+
+| Tool | Mode | Description |
+|------|:-:|-------------|
+| `get_13f_holdings` | A | Institutional 13F holdings from EDGAR |
+| `get_holders` | A | Top institutional shareholders (13F) |
+| `get_insider_trades` | A | Recent insider Form 4 buy/sell transactions |
+
+### Corporate events — SEC (1 tool)
+
+| Tool | Mode | Description |
+|------|:-:|-------------|
+| `get_corporate_events` | A | M&A, executive changes, restructurings (8-K) |
+
+### Bonds & short interest — FINRA TRACE (3 tools)
 
 | Tool | Mode | Description |
 |------|:-:|-------------|
 | `search_bonds` | **S** | Search bond issuers via FINRA TRACE |
-| `get_bond_data` | **S** | Look up bonds by CUSIP |
+| `get_bond_data` | **S** | Look up bonds by CUSIP (FINRA TRACE) |
+| `get_short_interest` | A | Short percent of float, days to cover (FINRA) |
 
-### Macro — FRED (2 tools)
+### Macro — FRED / Treasury (2 tools)
 
 | Tool | Mode | Description |
 |------|:-:|-------------|
 | `get_yield_curve` | **S** | Treasury yield curve from FRED |
 | `get_fred_data` | **S** | Any FRED series (GDP, UNRATE, CPI, etc.) |
 
-### BDC & credit (2 tools)
+### BDC & private credit — SEC / Oxford Ledge (2 tools)
 
 | Tool | Mode | Description |
 |------|:-:|-------------|
-| `search_bdc_borrower` | A | Search BDC portfolio holdings by borrower |
+| `search_bdc_borrower` | A | Search BDC portfolio holdings by borrower (SEC SoI) |
 | `get_bdc_list` | A | All tracked BDCs with AUM and holdings |
 
-### Static reference (1 tool)
+### Reference — Oxford Ledge (1 tool)
 
 | Tool | Mode | Description |
 |------|:-:|-------------|
@@ -210,14 +192,12 @@ After editing config, restart Claude Desktop. You'll see the tools available.
 
 ## Data sources
 
-All data in 2.0.1+ flows through Oxford Ledge's licensed providers or keyless public APIs. **Nothing in this package scrapes Yahoo Finance** (the previous 1.x / 2.0.0 yfinance path was removed in the 2.0.1 Y1 excision sprint).
+Every tool is backed by **public data** — SEC EDGAR, FRED, U.S. Treasury, or FINRA TRACE. **Nothing in this package scrapes Yahoo Finance** (the 1.x / 2.0.0 yfinance path was removed in the 2.0.1 Y1 excision), and as of **3.0.0** there is **no commercial-vendor feed anywhere in the surface** (the FMP/Finnhub-backed quote/estimate/screen/news tools were removed — they live on the hosted Oxford Ledge MCP server).
 
-- **FMP** (Financial Modeling Prep) — real-time quotes, financials, analyst estimates. Routed through `OXFORD_LEDGE_URL` (API mode) — the pip package carries no FMP keys and bundles no FMP data; it proxies Oxford Ledge's licensed hosted service. (The vendor-price/profile tools that leaned on FMP were removed in 2.1.0.)
-- **SEC EDGAR** — XBRL fundamentals (`get_fundamentals`) and 10-K/10-Q/8-K filing lists (`get_sec_filings`) are fetched directly from EDGAR by the pip package (keyless). Form 4 insider transactions (`get_insider_trades`) and 13F holdings (`get_13f_holdings`) route through `OXFORD_LEDGE_URL` (API mode) against Oxford Ledge's EDGAR-backed tables.
-- **FINRA TRACE** — corporate bond search + CUSIP lookup, fetched directly by the pip package. Keyless public API.
-- **FRED** — Treasury yield curve + any FRED series, fetched directly by the pip package. **Requires `FRED_API_KEY`** (`get_yield_curve` / `get_fred_data` error out without it).
-- **Finnhub** — supplementary quotes + profile. Paid legitimate API (not scraper); routed through `OXFORD_LEDGE_URL`.
-- **Oxford Ledge proprietary data** — BDC holdings (54 BDCs, 9K+ borrowers), news archive, 176K+ Form 4 transactions, valuations history. API mode only.
+- **SEC EDGAR** — XBRL fundamentals (`get_fundamentals`) and 10-K/10-Q/8-K filing lists (`get_sec_filings`) are fetched directly from EDGAR by the pip package (keyless). Insider Form 4 (`get_insider_trades`), 13F holdings (`get_13f_holdings` / `get_holders`), 8-K events (`get_corporate_events`), capital-allocation + debt-maturity XBRL, and BDC Schedule-of-Investments parses route through `OXFORD_LEDGE_URL` (API mode) against Oxford Ledge's EDGAR-backed tables.
+- **FINRA TRACE** — corporate bond search + CUSIP lookup (fetched directly, keyless) and short interest (API mode). Public data.
+- **FRED / U.S. Treasury** — Treasury yield curve + any FRED series, fetched directly. **Requires `FRED_API_KEY`** (`get_yield_curve` / `get_fred_data` error out without it).
+- **Oxford Ledge proprietary parses** — BDC holdings (54 BDCs, 9K+ borrowers, from SEC SoI filings) + the curated value-investing corpus. API mode only.
 
 ---
 

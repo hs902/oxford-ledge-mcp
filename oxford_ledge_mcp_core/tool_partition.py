@@ -35,25 +35,25 @@ from __future__ import annotations
 # calculate_intrinsic_value, get_company_data, get_company_profile,
 # get_market_indicators, get_peer_comparison, get_price_history,
 # get_valuation_history from the in-tree server (vendor-fed, no distributable source).
+# 2026-07-21 3B keyless-public cut (OWNER call): the pip package is now
+# gov-public-data-only (SEC EDGAR / FRED / Treasury / FINRA-TRACE / OL-original).
+# get_anomaly_flags, get_economic_calendar, get_news, get_options_chain,
+# search_company were removed from the PIP server (vendor/blended/aggregated
+# lineage) but KEPT in the in-tree hosted server, so they moved SHARED -> IN_TREE_ONLY.
 SHARED_TOOLS: frozenset[str] = frozenset({
     "get_13f_holdings",
-    "get_anomaly_flags",
     "get_bdc_list",
     "get_bond_data",
     "get_capital_allocation",
     "get_corporate_events",
     "get_debt_maturities",
-    "get_economic_calendar",
     "get_fred_data",
     "get_fundamentals",
-    "get_news",
-    "get_options_chain",
     "get_short_interest",
     "get_value_investing_fact",
     "get_yield_curve",
     "search_bdc_borrower",
     "search_bonds",
-    "search_company",
 })
 
 # Tools present ONLY in the in-tree server (mcp_server.py).
@@ -63,6 +63,14 @@ IN_TREE_ONLY_TOOLS: frozenset[str] = frozenset({
     # 2026-07-21 FMP-removal: dropped batch_get_ticker_data, bulk_get_fundamentals,
     # get_analyst_estimates, get_calendar, get_earnings_transcript,
     # get_estimate_revisions, get_portfolio_analytics, run_screener (vendor-fed).
+    # 2026-07-21 3B keyless-public cut: moved here from SHARED (removed from the
+    # PIP server as vendor/blended/aggregated lineage; kept in the in-tree hosted
+    # server). get_options_chain is also an env-gated stub (below).
+    "get_anomaly_flags",
+    "get_economic_calendar",
+    "get_news",
+    "get_options_chain",
+    "search_company",
     "get_activist_stakes",        # MCP B.3 (#239) — new in-tree wrapper
     "get_ai_question",
     "get_fails_to_deliver",       # MCP B.3 (#239) — new in-tree wrapper
@@ -123,23 +131,16 @@ IN_TREE_ONLY_TOOLS: frozenset[str] = frozenset({
 # In-tree server doesn't implement them because its data layer
 # (data_providers) already provides richer versions.
 PIP_ONLY_TOOLS: frozenset[str] = frozenset({
-    "compare_stocks",
-    "get_analyst_recommendations",
-    "get_balance_sheet",
-    "get_cash_flow",
-    "get_company_info",
-    "get_financials",
-    "get_holders",
-    "get_insider_trades",
-    "get_sec_filings",
-    "get_stock_quote",
-    "screen_stocks",
-    # 2026-07-21 FMP-removal: the 7 vendor-fed tools (calculate_intrinsic_value,
+    # 2026-07-21 3B keyless-public cut (OWNER call): the 8 vendor-fed PIP_ONLY tools
+    # (compare_stocks, get_analyst_recommendations, get_balance_sheet, get_cash_flow,
+    # get_company_info, get_financials, get_stock_quote, screen_stocks — all FMP-primary
+    # via OXFORD_LEDGE_URL) were REMOVED from the pip server. What remains is gov-public:
+    "get_holders",         # SEC 13F (via /api/13f-holdings)
+    "get_insider_trades",  # SEC Form 4 (via /api/insider-activity)
+    "get_sec_filings",     # SEC EDGAR filings (keyless)
+    # (Earlier 2026-07-21 FMP-removal had already dropped calculate_intrinsic_value,
     # get_company_data, get_company_profile, get_market_indicators, get_peer_comparison,
-    # get_price_history, get_valuation_history) that briefly lived here after being
-    # dropped from the IN-TREE server were REMOVED from the pip server too (stdio proxy
-    # handlers + inline TOOLS schema blocks) in the pip-package cleanup — no distributable
-    # source. The `twine` republish that ships this cleanup to PyPI is OWNER-gated.
+    # get_price_history, get_valuation_history from the pip server.)
 })
 
 

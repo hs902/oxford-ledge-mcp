@@ -5,6 +5,30 @@ All notable changes to `oxford-ledge-mcp` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.0.0 (2026-07-21)
+
+### Removed (breaking) — gov-public-data-only surface
+- **13 vendor-data-lineage tools removed** so the entire package surface is backed
+  ONLY by public data (SEC EDGAR / FRED / U.S. Treasury / FINRA TRACE) — no
+  commercial-vendor (FMP/Finnhub/options-vendor) feed anywhere:
+  `get_stock_quote`, `get_financials`, `get_balance_sheet`, `get_cash_flow`,
+  `get_analyst_recommendations`, `get_company_info`, `compare_stocks`,
+  `screen_stocks`, `get_anomaly_flags`, `get_options_chain`, `get_economic_calendar`,
+  `get_news`, `search_company`.
+  These remain available via the **hosted Oxford Ledge MCP server**. Removing public
+  tools is backward-incompatible → major version. **`2.1.0` remains installable** —
+  pin `oxford-ledge-mcp==2.1.0` if you depend on any of the above. See `MIGRATING.md`.
+- Package now exposes **16 tools** (6 keyless-standalone + 10 SEC/gov via
+  `OXFORD_LEDGE_URL`). Description tool count corrected `29 → 16`.
+
+### Changed
+- A call to any removed tool returns a **structured migration pointer** (naming the
+  SEC-XBRL / FRED replacement or the hosted server), not a bare `Unknown tool`.
+
+### Unchanged
+- Every surviving tool keeps its arg names, return shapes, and MCP wire format.
+  Ticker-normalization behavior (`normalize_ticker`) is preserved.
+
 ## 2.1.0 (2026-07-21)
 
 ### Removed (breaking)

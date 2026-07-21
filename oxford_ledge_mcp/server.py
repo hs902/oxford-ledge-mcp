@@ -157,76 +157,6 @@ def _log(msg):
 TOOLS = [
     # ── Core company data (API-mode via OXFORD_LEDGE_URL; Y1 2026-04-24) ──
     {
-        "name": "get_stock_quote",
-        "description": (
-            "Get current stock price, change, volume, market cap, P/E, "
-            "EV/EBITDA, dividend yield, beta, and 52-week range for a ticker."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL, MSFT)"}
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
-        "name": "get_financials",
-        "description": (
-            "Get income statement data: revenue, net income, EBITDA, operating "
-            "income, and gross profit for the last 4 years."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol"}
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
-        "name": "get_balance_sheet",
-        "description": (
-            "Get balance sheet data: total assets, liabilities, equity, debt, "
-            "cash, current assets, and current liabilities for the last 4 years."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol"}
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
-        "name": "get_cash_flow",
-        "description": (
-            "Get cash flow statement: operating, investing, financing cash flows "
-            "and free cash flow for the last 4 years."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol"}
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
-        "name": "get_analyst_recommendations",
-        "description": (
-            "Get analyst recommendations (buy/hold/sell counts), price targets "
-            "(mean, high, low), and recommendation key for a stock."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol"}
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
         "name": "get_holders",
         "description": "Get top 10 institutional shareholders for a stock with share counts and values.",
         "inputSchema": {
@@ -235,34 +165,6 @@ TOOLS = [
                 "ticker": {"type": "string", "description": "Stock ticker symbol"}
             },
             "required": ["ticker"],
-        },
-    },
-    {
-        "name": "get_company_info",
-        "description": (
-            "Get company profile: name, sector, industry, employee count, "
-            "website, headquarters location, and business description."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol"}
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
-        "name": "compare_stocks",
-        "description": (
-            "Compare key metrics (P/E, EV/EBITDA, margins, growth, ROE, "
-            "dividend yield, beta) across 2-5 stocks side by side."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "tickers": {"type": "string", "description": "Comma-separated ticker symbols (e.g. AAPL,MSFT,GOOG)"}
-            },
-            "required": ["tickers"],
         },
     },
     {
@@ -289,34 +191,6 @@ TOOLS = [
                 "ticker": {"type": "string", "description": "Stock ticker symbol"}
             },
             "required": ["ticker"],
-        },
-    },
-    {
-        "name": "get_options_chain",
-        "description": "Get options chain (calls and puts) for a stock with nearest expiry date.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol"},
-                "expiration": {"type": "string", "description": "Expiration date filter (YYYY-MM-DD format, optional)"},
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
-        "name": "screen_stocks",
-        "description": (
-            "Screen stocks by sector, market cap, P/E ratio, dividend yield, "
-            "and other filters. Returns top matches from a curated universe."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "sector": {"type": "string", "description": "Sector filter (Technology, Healthcare, Financial, Energy, etc). Optional."},
-                "min_market_cap_b": {"type": "number", "description": "Minimum market cap in billions. Optional."},
-                "max_pe": {"type": "number", "description": "Maximum P/E ratio. Optional."},
-                "min_dividend_yield": {"type": "number", "description": "Minimum dividend yield %. Optional."},
-            },
         },
     },
     # ── SEC EDGAR tools (standalone via direct API) ──
@@ -412,20 +286,6 @@ TOOLS = [
     },
     # ── API-mode tools (require OXFORD_LEDGE_URL) ──
     {
-        "name": "search_company",
-        "description": (
-            "Fuzzy search for companies by name, ticker, or industry. Returns "
-            "matching company profiles from the Oxford Ledge database. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Search query (company name, ticker, or industry)"}
-            },
-            "required": ["query"],
-        },
-    },
-    {
         "name": "get_corporate_events",
         "description": (
             "Get corporate events for a ticker: M&A activity, executive changes, "
@@ -467,21 +327,6 @@ TOOLS = [
         },
     },
     {
-        "name": "get_anomaly_flags",
-        "description": (
-            "Run 15 automated anomaly checks on a stock: short interest, "
-            "Altman Z-Score, leverage, negative FCF, extreme P/E, insider "
-            "selling, and more. Returns severity, label, and detail for each flag. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL)"}
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
         "name": "get_debt_maturities",
         "description": (
             "Get the debt maturity schedule from SEC EDGAR 10-K footnotes. "
@@ -512,21 +357,6 @@ TOOLS = [
         },
     },
     {
-        "name": "get_news",
-        "description": (
-            "Search the Oxford Ledge news archive for headlines with sentiment "
-            "scores. Supports full-text search, ticker filtering, and pagination. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Search query (e.g. 'tariff', 'earnings beat')"},
-                "ticker": {"type": "string", "description": "Filter to a specific ticker (e.g. AAPL)"},
-                "limit": {"type": "number", "description": "Max results to return (default 25, max 100)"},
-            },
-        },
-    },
-    {
         "name": "get_13f_holdings",
         "description": (
             "Get top institutional holdings from a fund's latest SEC 13F filing. "
@@ -554,19 +384,6 @@ TOOLS = [
             "properties": {
                 "category": {"type": "string", "description": "Optional category: margin_of_safety, intrinsic_value, market_psychology, circle_of_competence, patience, contrarian, risk_management"},
                 "query": {"type": "string", "description": "Optional search query to find facts by keyword (e.g. 'moat', 'fear')"},
-            },
-        },
-    },
-    {
-        "name": "get_economic_calendar",
-        "description": (
-            "Get upcoming economic events and data releases including "
-            "FOMC meetings, jobs reports, CPI releases, and GDP prints. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "days": {"type": "integer", "description": "Number of days to look ahead (default 90)"},
             },
         },
     },
@@ -655,128 +472,6 @@ def _safe(v, default=None):
         return default
 
 
-@mcp_tool(name="get_stock_quote", cache=MARKET)
-def tool_get_stock_quote(args):
-    """Current price + valuation multiples + market cap.
-
-    Y1 (2026-04-24): migrated from yfinance to Oxford Ledge API.
-    Requires OXFORD_LEDGE_URL — standalone mode no longer supports this
-    tool because the quote/valuation data lives server-side in Oxford
-    Ledge's licensed hosted service.
-    """
-    ticker = normalize_ticker(args.get("ticker"))
-    data = _api_get("/api/data", {"ticker": ticker})
-    if not isinstance(data, dict):
-        raise ToolError(ToolError.DATA_UNAVAILABLE, f"No data found for ticker '{ticker}'")
-    price = data.get("price", {}) if isinstance(data.get("price"), dict) else {}
-    metrics = data.get("metrics", {}) if isinstance(data.get("metrics"), dict) else {}
-    return {
-        "ticker": ticker,
-        "company": _safe(data.get("company") or data.get("companyName"), ticker),
-        "price": _safe(price.get("current") or data.get("lastPrice")),
-        "change": _safe(price.get("change")),
-        "changePct": _safe(price.get("changePct")),
-        "volume": _safe(price.get("volume")),
-        "marketCap": _safe(data.get("marketCap") or price.get("marketCap")),
-        "pe": _safe(metrics.get("pe") or data.get("peRatio")),
-        "forwardPe": _safe(metrics.get("forwardPE")),
-        "evEbitda": _safe(metrics.get("evEbitda")),
-        "pb": _safe(metrics.get("pb")),
-        "dividendYield": _safe(metrics.get("dividendYield") or data.get("dividendYield")),
-        "beta": _safe(metrics.get("beta") or data.get("beta")),
-        "52weekHigh": _safe(price.get("week52High")),
-        "52weekLow": _safe(price.get("week52Low")),
-        "sector": _safe(data.get("sector")),
-        "industry": _safe(data.get("industry")),
-    }
-
-
-@mcp_tool(name="get_financials", cache=FUNDAMENTAL)
-def tool_get_financials(args):
-    """Income statement — requires OXFORD_LEDGE_URL (Y1 2026-04-24)."""
-    ticker = normalize_ticker(args.get("ticker"))
-    data = _api_get("/api/company-financials", {"ticker": ticker, "years": 10})
-    if not isinstance(data, dict):
-        raise ToolError(ToolError.DATA_UNAVAILABLE, f"No financial data available for '{ticker}'")
-    annual = data.get("annual") or []
-    periods = []
-    for row in annual[:4]:
-        periods.append({
-            "date": str(row.get("fiscal_year") or row.get("date") or ""),
-            "total_revenue": _safe(row.get("revenue")),
-            "net_income": _safe(row.get("net_income")),
-            "ebitda": _safe(row.get("ebitda")),
-            "operating_income": _safe(row.get("operating_income")),
-            "gross_profit": _safe(row.get("gross_profit")),
-        })
-    return {"ticker": ticker, "periods": periods}
-
-
-@mcp_tool(name="get_balance_sheet", cache=FUNDAMENTAL)
-def tool_get_balance_sheet(args):
-    """Balance sheet — requires OXFORD_LEDGE_URL (Y1 2026-04-24)."""
-    ticker = normalize_ticker(args.get("ticker"))
-    data = _api_get("/api/company-financials", {"ticker": ticker, "years": 10})
-    if not isinstance(data, dict):
-        raise ToolError(ToolError.DATA_UNAVAILABLE, f"No balance sheet data available for '{ticker}'")
-    annual = data.get("annual") or []
-    periods = []
-    for row in annual[:4]:
-        periods.append({
-            "date": str(row.get("fiscal_year") or row.get("date") or ""),
-            "total_assets": _safe(row.get("total_assets")),
-            "total_liabilities_net_minority_interest": _safe(row.get("total_liabilities")),
-            "stockholders_equity": _safe(row.get("stockholders_equity")),
-            "total_debt": _safe(row.get("total_debt")),
-            "cash_and_cash_equivalents": _safe(row.get("cash")),
-            "current_assets": _safe(row.get("current_assets")),
-            "current_liabilities": _safe(row.get("current_liabilities")),
-        })
-    return {"ticker": ticker, "periods": periods}
-
-
-@mcp_tool(name="get_cash_flow", cache=FUNDAMENTAL)
-def tool_get_cash_flow(args):
-    """Cash flow statement — requires OXFORD_LEDGE_URL (Y1 2026-04-24)."""
-    ticker = normalize_ticker(args.get("ticker"))
-    data = _api_get("/api/company-financials", {"ticker": ticker, "years": 10})
-    if not isinstance(data, dict):
-        raise ToolError(ToolError.DATA_UNAVAILABLE, f"No cash flow data available for '{ticker}'")
-    annual = data.get("annual") or []
-    periods = []
-    for row in annual[:4]:
-        periods.append({
-            "date": str(row.get("fiscal_year") or row.get("date") or ""),
-            "operating_cash_flow": _safe(row.get("operating_cash_flow")),
-            "capital_expenditure": _safe(row.get("capex")),
-            "free_cash_flow": _safe(row.get("free_cash_flow")),
-            "investing_cash_flow": _safe(row.get("investing_cash_flow")),
-            "financing_cash_flow": _safe(row.get("financing_cash_flow")),
-        })
-    return {"ticker": ticker, "periods": periods}
-
-
-@mcp_tool(name="get_analyst_recommendations", cache=FUNDAMENTAL)
-def tool_get_analyst_recommendations(args):
-    """Analyst target prices + consensus recommendation.
-    Y1 (2026-04-24): now requires OXFORD_LEDGE_URL (routes via the Oxford
-    Ledge hosted service)."""
-    ticker = normalize_ticker(args.get("ticker"))
-    data = _api_get("/api/analyst-estimates", {"ticker": ticker})
-    if not isinstance(data, dict):
-        raise ToolError(ToolError.DATA_UNAVAILABLE, f"No analyst data for '{ticker}'")
-    return {
-        "ticker": ticker,
-        "targetMean": _safe(data.get("targetMeanPrice") or data.get("target_mean")),
-        "targetHigh": _safe(data.get("targetHighPrice") or data.get("target_high")),
-        "targetLow": _safe(data.get("targetLowPrice") or data.get("target_low")),
-        "numberOfAnalysts": _safe(data.get("numberOfAnalysts") or data.get("num_analysts")),
-        "recommendation": _safe(data.get("recommendation") or data.get("consensus")),
-        "epsEstimates": data.get("epsEstimates") or [],
-        "revenueEstimates": data.get("revenueEstimates") or [],
-    }
-
-
 @mcp_tool(name="get_holders", cache=FUNDAMENTAL)
 def tool_get_holders(args):
     """Top institutional holders from SEC 13F filings.
@@ -797,66 +492,6 @@ def tool_get_holders(args):
             "type": "institutional",
         })
     return {"ticker": ticker, "holders": holders}
-
-
-@mcp_tool(name="get_company_info", cache=FUNDAMENTAL)
-def tool_get_company_info(args):
-    """Sector, industry, employees, description.
-    Y1 (2026-04-24): now requires OXFORD_LEDGE_URL."""
-    ticker = normalize_ticker(args.get("ticker"))
-    data = _api_get("/api/company-profile", {"ticker": ticker})
-    if not isinstance(data, dict):
-        raise ToolError(ToolError.DATA_UNAVAILABLE, f"No company info for '{ticker}'")
-    return {
-        "ticker": ticker,
-        "name": _safe(data.get("companyName") or data.get("name")),
-        "sector": _safe(data.get("sector")),
-        "industry": _safe(data.get("industry")),
-        "employees": _safe(data.get("employees") or data.get("fullTimeEmployees")),
-        "website": _safe(data.get("website")),
-        "city": _safe(data.get("city")),
-        "state": _safe(data.get("state")),
-        "country": _safe(data.get("country")),
-        "description": (_safe(data.get("description") or data.get("businessDescription")) or "")[:500],
-    }
-
-
-@mcp_tool(name="compare_stocks", cache=FUNDAMENTAL)
-def tool_compare_stocks(args):
-    """Side-by-side comparison of 2-5 tickers.
-    Y1 (2026-04-24): now requires OXFORD_LEDGE_URL. Composes /api/data
-    lookups per ticker; no new upstream dependency."""
-    tickers = [normalize_ticker(t) for t in (args.get("tickers") or "").split(",") if t.strip()][:5]
-    if len(tickers) < 2:
-        raise ToolError(ToolError.INVALID_PARAMS, "Provide at least 2 comma-separated tickers")
-    results = []
-    for ticker in tickers:
-        try:
-            data = _api_get("/api/data", {"ticker": ticker})
-            if not isinstance(data, dict):
-                results.append({"ticker": ticker, "error": "Failed to fetch data"})
-                continue
-            metrics = data.get("metrics", {}) if isinstance(data.get("metrics"), dict) else {}
-            price = data.get("price", {}) if isinstance(data.get("price"), dict) else {}
-            results.append({
-                "ticker": ticker,
-                "name": _safe(data.get("company") or data.get("companyName"), ticker),
-                "price": _safe(price.get("current") or data.get("lastPrice")),
-                "marketCap": _safe(data.get("marketCap")),
-                "pe": _safe(metrics.get("pe") or data.get("peRatio")),
-                "forwardPe": _safe(metrics.get("forwardPE")),
-                "evEbitda": _safe(metrics.get("evEbitda")),
-                "profitMargin": _safe(metrics.get("profitMargins") or metrics.get("netMargin")),
-                "revenueGrowth": _safe(metrics.get("revenueGrowth")),
-                "roe": _safe(metrics.get("roe")),
-                "dividendYield": _safe(metrics.get("dividendYield") or data.get("dividendYield")),
-                "beta": _safe(metrics.get("beta") or data.get("beta")),
-            })
-        except ToolError:
-            raise  # let API_REQUIRED propagate if URL is unset
-        except Exception:
-            results.append({"ticker": ticker, "error": "Failed to fetch data"})
-    return {"comparison": results}
 
 
 @mcp_tool(name="get_sec_filings", cache=FUNDAMENTAL)
@@ -908,60 +543,6 @@ def tool_get_insider_trades(args):
             "date": row.get("date") or row.get("transactionDate") or "",
         })
     return {"ticker": ticker, "trades": trades}
-
-
-# min_tier="plus": mirrors the in-tree mcp_server.py canonical
-# per-tool tier table (M2 2026-04-24). Premium analytics tool, NOT
-# free SEC/EDGAR/FRED/Treasury/FINRA data (sf_monetization_v3).
-# Enforced on the HTTP path by routes/routes_admin_fastapi/mcp.py
-# (CISO P1 2026-05-18) and on the stdio path by the env-var check.
-@mcp_tool(name="get_options_chain", cache=FUNDAMENTAL, min_tier="plus")
-def tool_get_options_chain(args):
-    """Options chain with Greeks.
-    Y1 (2026-04-24): was yfinance; now routes to OL's options endpoint
-    which is itself blocked on Tradier activation (OWNER #11). This
-    tool is effectively a stub until Tradier lands — signals ApiRequired
-    when OL is reachable but returns the upstream's 'not implemented'
-    structured error."""
-    ticker = normalize_ticker(args.get("ticker"))
-    data = _api_get("/api/options", {"ticker": ticker})
-    # Bubble up OL's response shape directly; OL may return
-    # {"error": "not_implemented", "reason": "Tradier activation required"}
-    return data if isinstance(data, dict) else {"ticker": ticker, "error": "Unexpected upstream response"}
-
-
-@mcp_tool(name="screen_stocks", cache=NEVER)
-def tool_screen_stocks(args):
-    """Stock screener with financial filters.
-
-    Y1 (2026-04-24): was a yfinance loop over 30 hard-coded mega-caps;
-    now routes to OL's /api/screener endpoint which has the full
-    5,407-ticker universe + proper indexing. Requires OXFORD_LEDGE_URL.
-    Pre-Y1 mega-cap fallback deliberately dropped — hard-coded tickers
-    drift and yfinance ToS-conflict was the whole point of Y1."""
-    params = {
-        "sector": args.get("sector"),
-        "min_market_cap_b": args.get("min_market_cap_b"),
-        "max_pe": args.get("max_pe"),
-        "min_dividend_yield": args.get("min_dividend_yield"),
-        "limit": args.get("limit") or 10,
-    }
-    data = _api_get("/api/screener", {k: v for k, v in params.items() if v is not None})
-    if not isinstance(data, dict):
-        return {"matches": [], "total_screened": 0, "error": "Upstream returned unexpected shape"}
-    raw = data.get("results") or data.get("matches") or []
-    matches = []
-    for row in raw[:int(params["limit"])]:
-        matches.append({
-            "ticker": row.get("ticker"),
-            "name": row.get("name") or row.get("companyName") or row.get("ticker"),
-            "sector": row.get("sector"),
-            "marketCap": _safe(row.get("marketCap")),
-            "pe": _safe(row.get("pe") or row.get("peRatio")),
-            "dividendYield": _safe(row.get("dividendYield")),
-            "price": _safe(row.get("price") or row.get("lastPrice")),
-        })
-    return {"matches": matches, "total_screened": data.get("total_screened") or len(raw)}
 
 
 @mcp_tool(name="get_fundamentals", cache=FUNDAMENTAL, heavy=True)
@@ -1203,11 +784,6 @@ def tool_get_short_interest(args):
 # ── API-mode tool implementations ────────────────────────────────────────────
 # These tools proxy to a running Oxford Ledge instance.
 
-@mcp_tool(name="search_company", cache=FUNDAMENTAL)
-def tool_search_company(args):
-    return _api_get("/api/fund-search", {"q": args["query"]})
-
-
 @mcp_tool(name="get_corporate_events", cache=FUNDAMENTAL)
 def tool_get_corporate_events(args):
     ticker = normalize_ticker(args.get("ticker"))
@@ -1227,12 +803,6 @@ def tool_get_bdc_list(args):
     return _api_get("/api/bdc/list")
 
 
-@mcp_tool(name="get_anomaly_flags", cache=MARKET)
-def tool_get_anomaly_flags(args):
-    ticker = normalize_ticker(args.get("ticker"))
-    return _api_get("/api/data", {"ticker": ticker})
-
-
 # min_tier="plus": canonical premium analytics (see get_options_chain
 # note above). Mirrors mcp_server.py; sf_monetization_v3-compliant.
 @mcp_tool(name="get_debt_maturities", cache=FUNDAMENTAL, heavy=True, min_tier="plus")
@@ -1247,18 +817,6 @@ def tool_get_debt_maturities(args):
 def tool_get_capital_allocation(args):
     ticker = normalize_ticker(args.get("ticker"))
     return _api_get("/api/capital-structure", {"ticker": ticker})
-
-
-@mcp_tool(name="get_news", cache=MARKET)
-def tool_get_news(args):
-    params = {}
-    if args.get("query"):
-        params["q"] = args["query"]
-    if args.get("ticker"):
-        params["ticker"] = normalize_ticker(args.get("ticker"))
-    if args.get("limit"):
-        params["limit"] = str(int(args["limit"]))
-    return _api_get("/api/news/search", params)
 
 
 # min_tier="plus": canonical premium analytics (see get_options_chain
@@ -1282,31 +840,41 @@ def tool_get_value_investing_fact(args):
     return _api_get("/api/random-ticker", params)
 
 
-@mcp_tool(name="get_economic_calendar", cache=MARKET)
-def tool_get_economic_calendar(args):
-    params = {}
-    if args.get("days"):
-        params["days"] = str(int(args["days"]))
-    return _api_get("/api/macro-events", params)
-
-
 # TOOL_MAP was formerly a 36-entry dict literal here. As of M1
 # Phase 1b (2026-04-24), registrations are via @mcp_tool decorators
 # on each tool function above; the dispatcher reads the core's
 # TOOL_DISPATCH view (imported above).
-# ── Removed-tool guidance (2.1.0 FMP-removal) ────────────────────────────────
-# The 7 vendor-data-lineage tools removed in 2.1.0. A client that calls a removed
-# name gets a structured migration pointer instead of a bare "Unknown tool", so an
-# agent can self-correct to the SEC-XBRL / hosted replacement. See CHANGELOG.md +
-# MIGRATING.md. (2.0.4 stays installable on PyPI for anyone pinning the old tools.)
+# ── Removed-tool guidance ────────────────────────────────────────────────────
+# Vendor-data-lineage tools removed across 2.1.0 (FMP-removal) + 3.0.0 (keyless-
+# public cut). A client that calls a removed name gets a structured migration
+# pointer instead of a bare "Unknown tool", so an agent can self-correct to the
+# SEC-XBRL / FRED / hosted replacement. Pointers name ONLY tools that survive in
+# this package (the 16 gov-public tools) or "the hosted Oxford Ledge MCP server".
+# See CHANGELOG.md + MIGRATING.md. (2.0.4 / 2.1.0 stay installable on PyPI for
+# anyone pinning the old tools.)
 _REMOVED_TOOLS = {
+    # 2.1.0 FMP-removal
     "calculate_intrinsic_value": "removed in 2.1.0 (vendor-fed). Use `get_fundamentals` for SEC-XBRL statements; the DCF/EPV/Graham signal `ol_intrinsic_value` is available via the hosted Oxford Ledge MCP server.",
-    "get_company_data": "removed in 2.1.0 (vendor-fed). Use `get_fundamentals` (SEC XBRL) or `search_company`.",
-    "get_company_profile": "removed in 2.1.0 (vendor-fed). Use `get_business_summary` (SEC 10-K Item 1) or `search_company`.",
-    "get_market_indicators": "removed in 2.1.0 (vendor-fed). Use `get_economic_calendar`, `get_yield_curve`, or `get_fred_data`.",
+    "get_company_data": "removed in 2.1.0 (vendor-fed). Use `get_fundamentals` (SEC XBRL).",
+    "get_company_profile": "removed in 2.1.0 (vendor-fed). Use `get_fundamentals` (SEC XBRL); company identity is available via the hosted Oxford Ledge MCP server.",
+    "get_market_indicators": "removed in 2.1.0 (vendor-fed). Use `get_yield_curve` or `get_fred_data` (FRED).",
     "get_peer_comparison": "removed in 2.1.0 (vendor-fed). Fetch `get_fundamentals` per ticker; `ol_peer_fundamentals` is available via the hosted Oxford Ledge MCP server.",
     "get_price_history": "removed in 2.1.0 (vendor-fed price data has no distributable source).",
     "get_valuation_history": "removed in 2.1.0 (vendor-fed).",
+    # 3.0.0 keyless-public cut (gov-public-data-only pip surface)
+    "get_stock_quote": "removed in 3.0.0 (keyless-public cut — vendor quote). SEC financials: `get_fundamentals`.",
+    "get_financials": "removed in 3.0.0 (keyless-public cut — FMP-primary). Use `get_fundamentals` (SEC XBRL).",
+    "get_balance_sheet": "removed in 3.0.0 (keyless-public cut — FMP-primary). Use `get_fundamentals` (SEC XBRL).",
+    "get_cash_flow": "removed in 3.0.0 (keyless-public cut — FMP-primary). Use `get_fundamentals` (SEC XBRL).",
+    "get_analyst_recommendations": "removed in 3.0.0 (keyless-public cut — vendor analyst estimates; no gov-public source). Available via the hosted Oxford Ledge MCP server.",
+    "get_company_info": "removed in 3.0.0 (keyless-public cut — vendor profile). Company identity via the hosted Oxford Ledge MCP server.",
+    "compare_stocks": "removed in 3.0.0 (keyless-public cut — vendor data). Fetch `get_fundamentals` per ticker.",
+    "screen_stocks": "removed in 3.0.0 (keyless-public cut — vendor screener). Available via the hosted Oxford Ledge MCP server.",
+    "get_anomaly_flags": "removed in 3.0.0 (keyless-public cut — vendor composite). Available via the hosted Oxford Ledge MCP server.",
+    "get_options_chain": "removed in 3.0.0 (keyless-public cut — options vendor). Available via the hosted Oxford Ledge MCP server.",
+    "get_economic_calendar": "removed in 3.0.0 (keyless-public cut). Use `get_fred_data` / `get_yield_curve` (FRED) for macro data.",
+    "get_news": "removed in 3.0.0 (keyless-public cut — aggregated third-party headlines). Available via the hosted Oxford Ledge MCP server.",
+    "search_company": "removed in 3.0.0 (keyless-public cut — blended profile source). SEC identity via `get_fundamentals` / `get_sec_filings`, or the hosted Oxford Ledge MCP server.",
 }
 
 

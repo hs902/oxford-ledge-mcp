@@ -19,4 +19,4 @@ Claude Desktop config (claude_desktop_config.json):
 }
 """
 
-__version__ = "2.1.0"  # keep in sync with pyproject.toml [project].version
+__version__ = "3.0.0"  # keep in sync with pyproject.toml [project].version

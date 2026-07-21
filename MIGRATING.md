@@ -135,6 +135,45 @@ yfinance imports. Accidental regression is impossible.
 
 ---
 
+## 3.0.0 — gov-public-data-only surface (keyless-public cut, 2026-07-21)
+
+**Breaking change: 13 vendor-data-lineage tools removed.** As of 3.0.0 the package
+is **gov-public-data-only** — every one of its 16 tools is backed solely by SEC
+EDGAR, FRED, U.S. Treasury, or FINRA TRACE. The following tools were removed (they
+no longer appear in `tools/list`; calling one returns a structured migration
+pointer):
+
+`get_stock_quote`, `get_financials`, `get_balance_sheet`, `get_cash_flow`,
+`get_analyst_recommendations`, `get_company_info`, `compare_stocks`, `screen_stocks`,
+`get_anomaly_flags`, `get_options_chain`, `get_economic_calendar`, `get_news`,
+`search_company`.
+
+### Why
+
+These tools proxied commercial-vendor data (FMP quotes/financials/estimates,
+options-vendor chains, aggregated third-party news, a blended-profile search). The
+2.1.0 FMP-removal narrowed the *default* surface; 3.0.0 finishes the job so the
+package is unambiguously public-data-only — a clean, redistributable, gov-sourced
+tool set with no commercial feed anywhere.
+
+### What to do
+
+- **Need any of the removed tools?** They live on the **hosted Oxford Ledge MCP
+  server** (the in-tree server behind `www.oxfordledge.com`), or pin
+  `pip install "oxford-ledge-mcp==2.1.0"` (which still ships them). PyPI is immutable
+  — 2.1.0 stays installable forever.
+- **For fundamentals**, prefer `get_fundamentals` (SEC XBRL) — it was always the
+  cleaner source than the removed `get_financials`/`get_balance_sheet`/`get_cash_flow`.
+- **For macro**, use `get_fred_data` / `get_yield_curve` (FRED/Treasury) instead of
+  the removed `get_economic_calendar`.
+
+### What's unchanged
+
+Every surviving tool keeps its name, argument schema, and return shape. Standalone
+mode is unaffected (the 6 keyless tools are all gov-public and all survive).
+
+---
+
 ## 2.1.0 — vendor-fed valuation tools removed (FMP-removal, 2026-07-21)
 
 **Breaking change affecting API-mode users of 7 tools.** The following
@@ -177,6 +216,8 @@ when they land here).
 
 ## Version history
 
+- **3.0.0** (2026-07-21) — gov-public-data-only surface: 13 more vendor
+  tools removed; the package is now 16 SEC/FRED/Treasury/FINRA tools. See above.
 - **2.1.0** (2026-07-21) — FMP-removal: 7 vendor-fed valuation/price
   tools removed for a clean-core redistributable surface. See above.
 - **2.0.1** (2026-04-24) — yfinance excision (Y1 sprint). See above.
