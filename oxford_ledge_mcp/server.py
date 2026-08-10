@@ -1,15 +1,19 @@
 """Oxford Ledge MCP Server — financial data tools for Claude Desktop.
 
-Provides 36 tools for querying stock data, SEC filings, credit data, BDC
-holdings, macro indicators, and more.
+Provides 13 gov-public-data tools for querying SEC filings & fundamentals,
+institutional & insider ownership, BDC/private-credit holdings, and macro
+rates. As of 3.1.0 this is a gov-public-data-only surface (SEC EDGAR / FRED /
+U.S. Treasury) — no commercial-vendor feed, and third-party-copyright fields
+(CUSIPs, agency ratings, third-party FRED series) are excluded.
 
 Two modes:
   1. **API mode** (required for most tools): Set OXFORD_LEDGE_URL to your
-     running Oxford Ledge instance. All 36 tools are available.
-  2. **Standalone mode**: no server needed; 5-7 tools work directly against
-     keyless public APIs (FRED macro, FINRA TRACE bonds, static reference).
-     The other ~30 tools raise ToolError.API_REQUIRED in this mode and
-     direct the user to set OXFORD_LEDGE_URL.
+     running Oxford Ledge instance. All 13 tools are available.
+  2. **Standalone mode**: no server needed; 4 tools work directly against
+     public APIs (2 keyless SEC EDGAR: get_fundamentals/get_sec_filings;
+     2 FRED via FRED_API_KEY: get_yield_curve/get_fred_data). The other 9
+     tools raise ToolError.API_REQUIRED in this mode and direct the user to
+     set OXFORD_LEDGE_URL.
 
 Y1 (2026-04-24): yfinance was removed from this package. Previous
 "standalone mode" covered 18 tools via yfinance; now standalone covers
@@ -27,6 +31,7 @@ import traceback
 import threading
 import hashlib
 import time as _time
+import datetime as _dt
 import urllib.request
 import urllib.parse
 
@@ -38,6 +43,7 @@ if _pkg_parent not in sys.path:
 
 import logging
 import math
+from typing import Any
 
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 _logger = logging.getLogger("oxford_ledge.mcp")
@@ -52,7 +58,7 @@ _API_URL = os.environ.get("OXFORD_LEDGE_URL", "").rstrip("/")
 # ANONYMOUS against prod — every tier-gated tool 402s and no call is attributable
 # to an account, so a paying customer running the published package got the free
 # tier and the agent-API meter counted nothing. Optional by design: the keyless
-# public-lineage tools (SEC EDGAR / FINRA / Treasury) keep working with no key,
+# public-lineage tools (SEC EDGAR / Treasury) keep working with no key,
 # which is the redistribution posture we shipped the clean core for.
 # The key rides in the `x-api-key` header (never a query string — query strings
 # land in access logs and browser history).
@@ -73,13 +79,18 @@ _mcp_heavy_semaphore = threading.Semaphore(_MCP_HEAVY_MAX_CONCURRENT)
 #
 # Tool registrations are now done via @mcp_tool decorators on each
 # `def tool_X(args):` function, which populate the core's REGISTRY at
-# module-import time. Claude Desktop sees the same 36 tools it saw
-# before; behavior is byte-equivalent per contract.
+# module-import time. Claude Desktop sees the current 13-tool gov-public
+# surface; behavior is byte-equivalent per contract.
 
-_MCP_HEAVY_TOOLS: set = set()  # populated by @mcp_tool(heavy=True)
+# CHAOS-3 (2026-08-10 vet): this WAS a local empty shadow ("populated by
+# @mcp_tool(heavy=True)" was false -- the decorator populates the CORE
+# registry's set), so is_heavy was always False and the 2-slot heavy limit
+# never enforced. Import the real set; never re-declare it here.
+from oxford_ledge_mcp_core import _MCP_HEAVY_TOOLS
 
 # Cache lock + dict (module-level for legacy callers; the core's
 # versions are canonical — these aliases point at the same objects).
+from oxford_ledge_mcp import __version__
 from oxford_ledge_mcp_core.cache import _TOOL_CACHE, _CACHE_LOCK
 from oxford_ledge_mcp_core import (
     mcp_tool,
@@ -128,7 +139,26 @@ def _log(msg):
     print(msg, file=sys.stderr, flush=True)
 
 
-# ── Tool definitions (36 tools) ──────────────────────────────────────────────
+# Third-party-licensed identifier fields that must not be redistributed by this
+# gov-public-data-only package (2026-07-21 compliance review): CUSIP is FactSet /
+# CUSIP Global Services IP; agency credit ratings are the rating agencies' IP. Applied
+# to raw-passthrough tools (get_13f_holdings, get_corporate_events) so a 13F/8-K row's
+# `cusip` (or a blended rating) never ships even though the underlying filing is public.
+_CARVEOUT_ID_KEYS = {"cusip", "moodysrating", "moodys_rating", "sprating", "sp_rating",
+                     "fitchrating", "fitch_rating", "creditrating", "credit_rating"}
+
+
+def _strip_carveout_ids(obj: Any) -> Any:
+    """Recursively drop third-party-licensed identifier/rating keys from a payload."""
+    if isinstance(obj, dict):
+        return {k: _strip_carveout_ids(v) for k, v in obj.items()
+                if k.lower() not in _CARVEOUT_ID_KEYS}
+    if isinstance(obj, list):
+        return [_strip_carveout_ids(x) for x in obj]
+    return obj
+
+
+# ── Tool definitions (13 gov-public tools) ───────────────────────────────────
 #
 # NOTE 2026-05-07: read-only consumers (the public /mcp catalog route, SSR
 # renderer) MUST import from the manifest module, NOT from here — importing
@@ -149,7 +179,7 @@ def _log(msg):
 # IN-TREE mcp_server (51 canonical tools, matching the public catalog) —
 # routes/routes_admin_fastapi/mcp.py. This file serves ONLY the external
 # stdio pip-package path (Claude Desktop et al. proxying REST endpoints via
-# OXFORD_LEDGE_URL). Rewriting these 36 legacy handlers as a thin
+# OXFORD_LEDGE_URL). Rewriting these 13 gov-public handlers as a thin
 # /api/mcp/tool passthrough bridge is the OWNER-gated package-republish
 # follow-on (task_queue #93); the drift gate deliberately does not equate
 # this list with the manifest until that repair ships.
@@ -210,35 +240,6 @@ TOOLS = [
         },
     },
     # ── Bond / credit tools (standalone via FINRA TRACE) ──
-    {
-        "name": "search_bonds",
-        "description": (
-            "Search for bond issuers by company name. Returns CUSIP, coupon rate, "
-            "maturity date, and debt type for matching bonds via FINRA TRACE."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Issuer name to search (e.g. Apple, Goldman Sachs)"}
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "get_bond_data",
-        "description": (
-            "Look up a specific bond by CUSIP identifier. Returns issuer, coupon rate, "
-            "maturity date, last trade price, yield to maturity, and trading volume "
-            "from FINRA TRACE."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "cusip": {"type": "string", "description": "9-character CUSIP identifier (e.g. 037833AK6 for Apple)"}
-            },
-            "required": ["cusip"],
-        },
-    },
     # ── Macro / economic tools (standalone via FRED) ──
     {
         "name": "get_yield_curve",
@@ -270,20 +271,6 @@ TOOLS = [
         },
     },
     # ── Short interest (API-mode via OXFORD_LEDGE_URL; Y1 2026-04-24) ──
-    {
-        "name": "get_short_interest",
-        "description": (
-            "Get short interest data for a ticker including short percent of float, "
-            "short ratio (days to cover), and shares short."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL)"}
-            },
-            "required": ["ticker"],
-        },
-    },
     # ── API-mode tools (require OXFORD_LEDGE_URL) ──
     {
         "name": "get_corporate_events",
@@ -360,13 +347,14 @@ TOOLS = [
         "name": "get_13f_holdings",
         "description": (
             "Get top institutional holdings from a fund's latest SEC 13F filing. "
-            "Accepts a CIK number or fund ticker. Returns fund name, filing date, "
-            "top holdings with share counts and market values. [Requires API mode]"
+            "Accepts a fund CIK number ONLY (not a ticker). Returns fund name, "
+            "filing date, top holdings with share counts and market values. "
+            "[Requires API mode]"
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "fund": {"type": "string", "description": "Fund CIK number (e.g. 1067983 for Berkshire Hathaway) or fund ticker symbol"},
+                "fund": {"type": "string", "description": "Fund CIK number (e.g. 1067983 for Berkshire Hathaway). CIK only — the API does not resolve fund tickers."},
                 "max_holdings": {"type": "number", "description": "Maximum number of holdings to return (default 50)"},
             },
             "required": ["fund"],
@@ -454,6 +442,16 @@ def _api_get(path, params=None, timeout=15):
                 "Oxford Ledge rate limit reached for this key.",
                 retry_after=retry_after,
             )
+        if e.code == 404:
+            # Same reasoning that earned 402 its own code: a 404 on a path is
+            # a client/server version mismatch (developer bug), not "the data
+            # doesn't exist" — never launder it as DATA_UNAVAILABLE.
+            raise ToolError(
+                ToolError.NOT_FOUND,
+                f"HTTP 404 for {path} — this endpoint does not exist on the "
+                "server. Likely a package/API version mismatch, not missing "
+                "data; report it rather than retrying other tickers.",
+            )
         raise ToolError(ToolError.DATA_UNAVAILABLE, f"API returned {e.code}: {body}")
     except urllib.error.URLError as e:
         raise ToolError(ToolError.DATA_UNAVAILABLE, f"Cannot reach Oxford Ledge API at {_API_URL}: {e.reason}")
@@ -479,7 +477,9 @@ def tool_get_holders(args):
     Oxford Ledge's SEC EDGAR integration). Migration path for future
     standalone support: call SEC EDGAR 13F endpoint directly."""
     ticker = normalize_ticker(args.get("ticker"))
-    data = _api_get("/api/13f-holdings", {"ticker": ticker})
+    # 2026-08-10 field test #2: /api/13f-holdings never existed — the live
+    # route is /api/institutional-holders (404'd on every call).
+    data = _api_get("/api/institutional-holders", {"ticker": ticker})
     if not isinstance(data, dict):
         return {"ticker": ticker, "holders": []}
     raw = data.get("holders") or data.get("filings") or []
@@ -499,9 +499,14 @@ def tool_get_sec_filings(args):
     ticker = normalize_ticker(args.get("ticker"))
     filing_type = args.get("filing_type", "").strip()
     try:
+        # 2026-08-10 field test #2: no filing_type used to silently default
+        # to 10-K while the manifest advertised 10-K/10-Q/8-K/DEF 14A — a
+        # no-arg call returned ten 10-Ks. Absent type now means ALL forms.
+        # (Also dropped the duplicated action=getcompany query param.)
+        _type_q = f"&type={filing_type}" if filing_type else ""
         cik_url = (
             f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company=&CIK={ticker}"
-            f"&type={filing_type or '10-K'}&dateb=&owner=include&count=10&search_text=&action=getcompany&output=atom"
+            f"{_type_q}&dateb=&owner=include&count=10&search_text=&output=atom"
         )
         req = urllib.request.Request(cik_url, headers={"User-Agent": "OxfordLedge contact@oxfordledge.com"})
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -535,11 +540,15 @@ def tool_get_insider_trades(args):
     raw = data.get("transactions") or data.get("trades") or []
     trades = []
     for row in raw[:15]:
+        # 2026-08-10 field test #2: the wire contract is camelCase
+        # (schemas/responses.py InsiderActivityTxn: insiderName /
+        # transactionType) — the old chains read keys the API never emits,
+        # so every row rendered an empty insider + type beside real shares.
         trades.append({
-            "insider": str(row.get("insider") or row.get("name") or row.get("reportingOwner") or ""),
+            "insider": str(row.get("insiderName") or row.get("insider") or row.get("name") or row.get("reportingOwner") or ""),
             "shares": _safe(row.get("shares") or row.get("transactionShares")),
             "value": _safe(row.get("value") or row.get("transactionValue")),
-            "type": row.get("type") or row.get("transactionCode") or "",
+            "type": row.get("transactionType") or row.get("type") or row.get("transactionCode") or "",
             "date": row.get("date") or row.get("transactionDate") or "",
         })
     return {"ticker": ticker, "trades": trades}
@@ -575,7 +584,9 @@ def tool_get_fundamentals(args):
 
         # Extract key line items
         line_items = {
-            "Revenue": ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"],
+            "Revenue": ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet",
+                        # investment companies (BDCs) tag revenue as total investment income
+                        "InvestmentIncomeOperating", "GrossInvestmentIncomeOperating"],
             "NetIncome": ["NetIncomeLoss"],
             "EPS": ["EarningsPerShareDiluted", "EarningsPerShareBasic"],
             "TotalAssets": ["Assets"],
@@ -585,114 +596,62 @@ def tool_get_fundamentals(args):
             "TotalDebt": ["LongTermDebt", "LongTermDebtNoncurrent"],
         }
 
+        # Flow (duration) concepts: a 10-K's companyfacts entries ALSO carry
+        # quarterly duration facts tagged form=10-K/fp=FY, so form+fp alone
+        # mixes Q rows into the annual series (2026-08-10 field test).
+        duration_labels = {"Revenue", "NetIncome", "EPS", "OperatingCashFlow"}
+
+        def _days(e):
+            try:
+                s = _dt.date.fromisoformat(e.get("start", ""))
+                t = _dt.date.fromisoformat(e.get("end", ""))
+                return (t - s).days
+            except ValueError:
+                return -1
+
         result = {"ticker": ticker, "data": {}}
         for label, concepts in line_items.items():
-            for concept in concepts:
-                if concept in us_gaap:
-                    units = us_gaap[concept].get("units", {})
-                    # Try USD first, then USD/shares for EPS
-                    unit_key = "USD/shares" if label == "EPS" else "USD"
-                    entries = units.get(unit_key, [])
-                    # Filter to 10-K annual filings
-                    annual = [e for e in entries if e.get("form") == "10-K" and e.get("fp") == "FY"]
-                    if annual:
-                        annual.sort(key=lambda x: x.get("end", ""), reverse=True)
-                        result["data"][label] = [
-                            {"period": e.get("end", ""), "value": e.get("val")}
-                            for e in annual[:10]
-                        ]
-                        break
+            # Filers SWITCH concepts over a decade (AAPL: Revenues ->
+            # RevenueFromContractWithCustomer... at FY2019), so first-hit
+            # concept selection truncates history. Merge all listed
+            # concepts per period end; earlier-listed concept wins a tie.
+            by_end = {}
+            for concept in reversed(concepts):
+                if concept not in us_gaap:
+                    continue
+                units = us_gaap[concept].get("units", {})
+                # Try USD first, then USD/shares for EPS
+                unit_key = "USD/shares" if label == "EPS" else "USD"
+                entries = units.get(unit_key, [])
+                annual = [e for e in entries
+                          if e.get("form") == "10-K" and e.get("fp") == "FY"
+                          and (label not in duration_labels
+                               or 330 <= _days(e) <= 400)]
+                # Each fiscal year re-appears as a comparative in later
+                # 10-Ks; keep ONE row per period end -- the latest-filed
+                # within a concept (restatements win), then let the
+                # higher-priority concept override cross-concept.
+                per_concept = {}
+                for e in annual:
+                    k = e.get("end", "")
+                    prev = per_concept.get(k)
+                    if prev is None or e.get("filed", "") > prev.get("filed", ""):
+                        per_concept[k] = e
+                by_end.update(per_concept)
+            if not by_end:
+                continue
+            newest_first = sorted(by_end.values(),
+                                  key=lambda x: x.get("end", ""),
+                                  reverse=True)
+            result["data"][label] = [
+                {"period": e.get("end", ""), "value": e.get("val")}
+                for e in newest_first[:10]
+            ]
         return result
     except ToolError:
         raise
     except Exception as e:
         raise ToolError(ToolError.DATA_UNAVAILABLE, f"EDGAR XBRL lookup failed for '{ticker}': {e}")
-
-
-@mcp_tool(name="search_bonds", cache=FUNDAMENTAL)
-def tool_search_bonds(args):
-    """Search bond issuers via FINRA TRACE."""
-    query = args["query"].strip()
-    if len(query) < 2:
-        raise ToolError(ToolError.INVALID_PARAMS, "Query must be at least 2 characters")
-    try:
-        search_url = (
-            "https://services-dynarep.ddwa.finra.org/public/getIssueData/bond"
-            f"?searchKey={urllib.parse.quote(query)}&count=25"
-        )
-        req = urllib.request.Request(search_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        raw_results = []
-        for item in (data if isinstance(data, list) else data.get("results", [])):
-            raw_results.append({
-                "cusip": item.get("cusip") or item.get("CUSIP", ""),
-                "issuer": item.get("issuerName") or item.get("companyName", ""),
-                "description": item.get("issueDescription") or item.get("bondDescription") or item.get("description", ""),
-                "coupon": item.get("couponRate") or item.get("coupon"),
-                "maturity": item.get("maturityDate", ""),
-                "debtType": item.get("debtType") or item.get("SubProductType") or item.get("subProductType", ""),
-            })
-        # Group by issuer
-        from collections import OrderedDict
-        issuer_map = OrderedDict()
-        for r in raw_results[:25]:
-            issuer_key = (r.get("issuer") or "Unknown").strip()
-            if issuer_key not in issuer_map:
-                issuer_map[issuer_key] = []
-            issuer_map[issuer_key].append({
-                "cusip": r["cusip"], "description": r.get("description", ""),
-                "coupon": r.get("coupon"), "maturity": r.get("maturity", ""),
-                "debtType": r.get("debtType", ""),
-            })
-        issuers = []
-        for name, bonds in issuer_map.items():
-            bonds.sort(key=lambda b: (b.get("debtType") or "", b.get("maturity") or ""))
-            issuers.append({"issuer": name, "bonds": bonds})
-        return {"issuers": issuers, "totalBonds": len(raw_results)}
-    except ToolError:
-        raise
-    except Exception as e:
-        raise ToolError(ToolError.DATA_UNAVAILABLE, f"Bond search failed: {e}")
-
-
-@mcp_tool(name="get_bond_data", cache=MARKET)
-def tool_get_bond_data(args):
-    """Look up a bond by CUSIP via FINRA TRACE."""
-    cusip = args["cusip"].strip().upper()
-    if len(cusip) < 6:
-        raise ToolError(ToolError.INVALID_PARAMS, "CUSIP must be at least 6 characters")
-    try:
-        url = (
-            "https://services-dynarep.ddwa.finra.org/public/getIssueData/bond"
-            f"?cusip={urllib.parse.quote(cusip)}"
-        )
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        if isinstance(data, list) and data:
-            item = data[0]
-        elif isinstance(data, dict):
-            results = data.get("results", [])
-            item = results[0] if results else None
-        else:
-            item = None
-        if not item:
-            raise ToolError(ToolError.DATA_UNAVAILABLE, f"No bond found for CUSIP '{cusip}'")
-        return {
-            "cusip": cusip,
-            "issuer": item.get("issuerName") or item.get("companyName", ""),
-            "description": item.get("issueDescription") or item.get("bondDescription", ""),
-            "coupon": item.get("couponRate") or item.get("coupon"),
-            "maturity": item.get("maturityDate", ""),
-            "debtType": item.get("debtType") or item.get("subProductType", ""),
-            "lastPrice": item.get("lastSalePrice") or item.get("lastPrice"),
-            "yield": item.get("yield") or item.get("yieldToMaturity"),
-        }
-    except ToolError:
-        raise
-    except Exception as e:
-        raise ToolError(ToolError.DATA_UNAVAILABLE, f"Bond lookup failed for '{cusip}': {e}")
 
 
 @mcp_tool(name="get_yield_curve", cache=FUNDAMENTAL)
@@ -727,13 +686,78 @@ def tool_get_yield_curve(args):
     return {"yield_curve": curve, "source": "FRED"}
 
 
+# Third-party / copyrighted FRED-series carve-out (3.1.0; hardened FAIL-CLOSED per the
+# 2026-07-21 CHAOS/DATA_CZAR/COUNSEL compliance review). FRED aggregates 800k+ series;
+# U.S.-government series (BLS / BEA / Census / Federal Reserve / Treasury) are public
+# domain and free to redistribute, but series from private commercial providers (S&P
+# Dow Jones, ICE BofA, Moody's, CBOE, Nasdaq, FTSE Russell, ...) are non-commercial-
+# only and may not be redistributed commercially. This gov-public-data-only package
+# refuses them. FAIL-CLOSED design:
+#   * Primary: fetch /fred/series metadata; if `notes`/`title` shows any copyright or
+#     named-licensor marker, REFUSE.
+#   * If the metadata probe is UNAVAILABLE (network/quota), DO NOT guess-serve — serve
+#     ONLY a series matching the known U.S.-gov source allowlist, else REFUSE.
+#   * Cache ONLY authoritative metadata verdicts (never a probe-failure fallback), so a
+#     transient blip can't poison-cache a carve-out series as clean; recovery self-heals.
+import re as _re
+
+# Copyright / third-party markers in the FRED notes/title (ASCII word, the (c) glyph,
+# or a named commercial licensor) — catches reworded / empty-"copyright" attributions.
+_FRED_THIRDPARTY_NOTE = _re.compile(
+    "copyright|©|all rights reserved|s&p|dow jones|standard & poor|case-shiller|"
+    "ice data|ice bofa|bofa merrill|moody|cboe|nasdaq omx|ftse|russell|msci|bloomberg",
+    _re.IGNORECASE)
+# Known U.S.-government / public-domain source prefixes — the allowlist used ONLY when
+# the metadata probe is unavailable (everything else fails closed / refused).
+_FRED_GOV_PREFIXES = (
+    "DGS", "DFF", "FEDFUNDS", "SOFR", "GDP", "CPIAUCSL", "CPILFESL", "PCEPI", "UNRATE",
+    "PAYEMS", "T10Y", "T5Y", "DTB", "TB3MS", "DFEDTAR", "DEXUS", "DEXJP", "DEXCH",
+    "M1SL", "M2SL", "HOUST", "RSAFS", "INDPRO", "PPIACO", "MICH", "RRPONTSYD", "WALCL")
+_fred_thirdparty_cache: dict[str, bool] = {}
+
+
+def _fred_series_is_thirdparty(series: str, key: str) -> bool:
+    """Fail-closed: True if the FRED series is (or cannot be confirmed NOT to be)
+    third-party copyright. Only authoritative FRED-metadata verdicts are cached."""
+    s = (series or "").upper()
+    if s in _fred_thirdparty_cache:
+        return _fred_thirdparty_cache[s]
+    try:
+        url = (f"https://api.stlouisfed.org/fred/series"
+               f"?series_id={urllib.parse.quote(s)}&api_key={key}&file_type=json")
+        with urllib.request.urlopen(urllib.request.Request(url), timeout=10) as resp:
+            rows = (json.loads(resp.read().decode("utf-8")).get("seriess") or [])
+    except Exception:
+        rows = None  # probe unavailable
+    if rows is not None:
+        # Authoritative FRED answer -> cache it.
+        if rows:
+            meta = (rows[0].get("notes") or "") + " " + (rows[0].get("title") or "")
+            verdict = bool(_FRED_THIRDPARTY_NOTE.search(meta))
+        else:
+            verdict = True  # unknown/invalid series id -> refuse
+        _fred_thirdparty_cache[s] = verdict
+        return verdict
+    # Probe unavailable: FAIL CLOSED. Serve ONLY a known U.S.-gov series; refuse the
+    # rest. Do NOT cache (so a recovered probe re-decides authoritatively next time).
+    return not s.startswith(_FRED_GOV_PREFIXES)
+
+
 @mcp_tool(name="get_fred_data", cache=FUNDAMENTAL)
 def tool_get_fred_data(args):
-    """Get FRED economic data series."""
+    """Get FRED economic data series (U.S.-government / public-domain series only)."""
     fred_key = os.environ.get("FRED_API_KEY", "")
     if not fred_key:
         raise ToolError(ToolError.API_REQUIRED, "Set FRED_API_KEY environment variable for FRED data")
     series = args["series"].strip().upper()
+    if _fred_series_is_thirdparty(series, fred_key):
+        raise ToolError(
+            ToolError.INVALID_PARAMS,
+            f"FRED series '{series}' carries third-party (non-U.S.-government) copyright "
+            f"(e.g. S&P Dow Jones Indices, ICE BofA, Moody's, CBOE) and is licensed for "
+            f"non-commercial use only. This gov-public-data package does not serve it. Use a "
+            f"U.S.-government series (BLS / BEA / Census / Federal Reserve / Treasury), or "
+            f"license the data directly from the copyright holder.")
     days = int(args.get("days", 365))
     from datetime import datetime, timedelta
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -758,29 +782,6 @@ def tool_get_fred_data(args):
         raise ToolError(ToolError.DATA_UNAVAILABLE, f"FRED data fetch failed for '{series}': {e}")
 
 
-@mcp_tool(name="get_short_interest", cache=MARKET)
-def tool_get_short_interest(args):
-    """Get short interest data.
-
-    Y1 (2026-04-24): migrated off yfinance. Now routes to OL's
-    /api/short-interest endpoint which is blocked on OWNER #23 (FINRA
-    Data API creds). Until that clears, the tool surfaces OL's
-    "not_implemented" structured response."""
-    ticker = normalize_ticker(args.get("ticker"))
-    data = _api_get("/api/short-interest", {"ticker": ticker})
-    if not isinstance(data, dict):
-        return {"ticker": ticker, "error": "Unexpected upstream response"}
-    return {
-        "ticker": ticker,
-        "sharesShort": _safe(data.get("sharesShort")),
-        "sharesFloat": _safe(data.get("sharesFloat") or data.get("floatShares")),
-        "shortRatio": _safe(data.get("shortRatio")),
-        "shortPercentOfFloat": _safe(data.get("shortPercentOfFloat") or data.get("percentFloat")),
-        "priorMonthSharesShort": _safe(data.get("priorMonthSharesShort") or data.get("sharesShortPriorMonth")),
-        **({"error": data.get("error"), "reason": data.get("reason")} if data.get("error") else {}),
-    }
-
-
 # ── API-mode tool implementations ────────────────────────────────────────────
 # These tools proxy to a running Oxford Ledge instance.
 
@@ -788,14 +789,20 @@ def tool_get_short_interest(args):
 def tool_get_corporate_events(args):
     ticker = normalize_ticker(args.get("ticker"))
     params = {"ticker": ticker}
+    # 2026-08-10 field test #2: /api/corporate-events never existed (the
+    # live route is /api/company/events, param name `type`) — 404'd always.
     if args.get("event_type"):
-        params["event_type"] = args["event_type"]
-    return _api_get("/api/corporate-events", params)
+        params["type"] = args["event_type"]
+    # Defense-in-depth: strip any third-party identifier/rating field an overlay might
+    # carry (SEC 8-K itself is public domain).
+    return _strip_carveout_ids(_api_get("/api/company/events", params))
 
 
 @mcp_tool(name="search_bdc_borrower", cache=FUNDAMENTAL)
 def tool_search_bdc_borrower(args):
-    return _api_get("/api/bdc/search", {"q": args["query"]})
+    # 2026-08-10 field test #2: /api/bdc/search never existed — the live
+    # route is /api/bdc/borrower (same `q` param).
+    return _api_get("/api/bdc/borrower", {"q": args["query"]})
 
 
 @mcp_tool(name="get_bdc_list", cache=FUNDAMENTAL)
@@ -824,20 +831,27 @@ def tool_get_capital_allocation(args):
 @mcp_tool(name="get_13f_holdings", cache=FUNDAMENTAL, heavy=True, min_tier="plus")
 def tool_get_13f_holdings(args):
     fund = args["fund"].strip()
-    params = {"fund": fund}
+    # 2026-08-10 field test #2: the route signature is cik-only
+    # (server_asgi fund_holdings(cik=Query(""))); sending fund= fell through
+    # to 400 "No CIK provided" on every call. The input schema now says CIK.
+    params = {"cik": fund}
     if args.get("max_holdings"):
         params["max_holdings"] = str(int(args["max_holdings"]))
-    return _api_get("/api/fund-holdings", params)
+    # Strip CUSIPs (FactSet/CGS IP) from the 13F payload before redistribution —
+    # the same carve-out that removed the bond tools in 3.1.0.
+    return _strip_carveout_ids(_api_get("/api/fund-holdings", params))
 
 
 @mcp_tool(name="get_value_investing_fact", cache=STATIC)
 def tool_get_value_investing_fact(args):
+    # Repointed 3.1.0 (compliance review): was mis-wired to a random-ticker profile
+    # endpoint that returned {ticker, company, marketCap, sector} (vendor-lineage fields),
+    # not a value-investing fact. /api/value-investing/random serves the OL-original
+    # curated lore corpus (value_investing_db) — clean OL IP.
     params = {}
     if args.get("category"):
         params["category"] = args["category"]
-    if args.get("query"):
-        params["q"] = args["query"]
-    return _api_get("/api/random-ticker", params)
+    return _api_get("/api/value-investing/random", params)
 
 
 # TOOL_MAP was formerly a 36-entry dict literal here. As of M1
@@ -875,6 +889,10 @@ _REMOVED_TOOLS = {
     "get_economic_calendar": "removed in 3.0.0 (keyless-public cut). Use `get_fred_data` / `get_yield_curve` (FRED) for macro data.",
     "get_news": "removed in 3.0.0 (keyless-public cut — aggregated third-party headlines). Available via the hosted Oxford Ledge MCP server.",
     "search_company": "removed in 3.0.0 (keyless-public cut — blended profile source). SEC identity via `get_fundamentals` / `get_sec_filings`, or the hosted Oxford Ledge MCP server.",
+    # 3.1.0 CUSIP carve-out (bond identifiers are FactSet / CUSIP Global Services IP)
+    "search_bonds": "removed in 3.1.0 (CUSIP carve-out — bond CUSIPs are FactSet IP, licensed separately from FINRA data). Available via the hosted Oxford Ledge MCP server.",
+    "get_bond_data": "removed in 3.1.0 (CUSIP carve-out — bond CUSIPs are FactSet IP, licensed separately from FINRA data). Available via the hosted Oxford Ledge MCP server.",
+    "get_short_interest": "removed in 3.1.0 (advertised stub with unresolved float-lineage + FINRA-attribution; returns until it's real). Available via the hosted Oxford Ledge MCP server.",
 }
 
 
@@ -953,7 +971,11 @@ def handle_request(req):
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "oxford-ledge-mcp", "version": "2.0.2"},
+                # 2026-08-10: was a hardcoded "2.0.2" under 3.x — the wheel
+                # introduced itself as a version two majors old, which cost a
+                # full field-test audit to a stale-build ambiguity. Contract-
+                # pinned to __version__ so it can never drift again.
+                "serverInfo": {"name": "oxford-ledge-mcp", "version": __version__},
             },
         }
 
@@ -1007,11 +1029,11 @@ def main():
     """Run the MCP server on stdin/stdout."""
     mode = "API" if _API_URL else "standalone"
     tool_count = len(TOOLS)
-    _log(f"Oxford Ledge MCP Server v2.0.2 starting ({tool_count} tools, {mode} mode)...")
+    _log(f"Oxford Ledge MCP Server v{__version__} starting ({tool_count} tools, {mode} mode)...")
     if _API_URL:
         _log(f"  API endpoint: {_API_URL}")
     else:
-        _log("  Tip: Set OXFORD_LEDGE_URL for all 36 tools. Standalone mode serves only the keyless public-API tools (SEC EDGAR, FINRA TRACE; FRED with FRED_API_KEY).")
+        _log("  Tip: Set OXFORD_LEDGE_URL for all 13 tools. Standalone mode serves only the keyless public-API tools (2 SEC EDGAR; FRED with FRED_API_KEY).")
 
     # Try to use the mcp package if available
     try:
@@ -1049,7 +1071,15 @@ def main():
 
         async def run():
             async with stdio_server() as (read_stream, write_stream):
-                await server.run(read_stream, write_stream, server.create_initialization_options())
+                # CHAOS-1 (2026-08-10 vet): create_initialization_options()
+                # defaults server_version to the mcp LIBRARY's own version, so
+                # SDK-path sessions introduced themselves as e.g. 1.26.0 — the
+                # exact version-ambiguity class that cost the field-test
+                # audit. Pass the package version explicitly.
+                init_opts = server.create_initialization_options()
+                init_opts.server_name = "oxford-ledge-mcp"
+                init_opts.server_version = __version__
+                await server.run(read_stream, write_stream, init_opts)
 
         asyncio.run(run())
 

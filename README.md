@@ -1,11 +1,11 @@
 # Oxford Ledge MCP Server
 
-> **Last updated:** 2026-07-21
-> **Version:** 3.0.0 (gov-public-data-only surface)
+> **Last updated:** 2026-08-10
+> **Version:** 3.1.1 (gov-public-data-only surface; CUSIP + third-party-FRED carve-outs)
 
 Financial data tools for [Claude Desktop](https://claude.ai/download) via the [Model Context Protocol](https://modelcontextprotocol.io/).
 
-**16 tools** for SEC filings & fundamentals, institutional & insider ownership, corporate bonds, BDC/private-credit holdings, and macro rates. As of 3.0.0 this is a **gov-public-data-only** package: every tool is backed by **SEC EDGAR, FRED, U.S. Treasury, or FINRA TRACE** (public data) — no commercial-vendor feed anywhere in the surface. MIT-licensed, Oxford-Ledge-authored. **6 tools run fully standalone** against keyless public APIs; the other 10 route SEC/gov data through a running Oxford Ledge instance via `OXFORD_LEDGE_URL`. (Vendor-fed quotes/estimates/screens/news are no longer in the package — use the hosted Oxford Ledge MCP server for those.)
+**13 tools** for SEC filings & fundamentals, institutional & insider ownership, BDC/private-credit holdings, and macro rates. As of 3.1.0 this is a **gov-public-data-only** package: every tool is backed by **SEC EDGAR, FRED, or U.S. Treasury** (public data) — no commercial-vendor feed anywhere in the surface, and third-party-copyright data is excluded (S&P/ICE/Moody's/CBOE FRED series are refused; FactSet-licensed bond CUSIPs are not disseminated). MIT-licensed, Oxford-Ledge-authored. **4 tools run fully standalone** against keyless public APIs; the other 9 route SEC/gov data through a running Oxford Ledge instance via `OXFORD_LEDGE_URL`. (Vendor-fed quotes/estimates/screens/news and CUSIP bond lookups are no longer in the package — use the hosted Oxford Ledge MCP server for those.)
 
 **Upgrading from 1.x / 2.0.0 / 2.0.1?** See [MIGRATING.md](./MIGRATING.md). Short version: tool names, arg schemas, and config are unchanged across the 2.x series. Two substantive changes:
 
@@ -50,7 +50,7 @@ falls back to the built-in stdio loop. Either way, requires Python ≥ 3.9.
 
 This server runs in one of three modes — pick the one that matches your Oxford Ledge subscription state. **The pip package is the user-distributed canonical path; the in-tree dev server is for Oxford Ledge contributors only.**
 
-### 1. API mode (recommended) — all 16 tools
+### 1. API mode (recommended) — all 13 tools
 
 For full functionality, point the server at a running Oxford Ledge instance. Add to your `claude_desktop_config.json`:
 
@@ -72,10 +72,10 @@ For full functionality, point the server at a running Oxford Ledge instance. Add
 
 `OXFORD_LEDGE_API_KEY` is your Oxford Ledge API key (create one at [oxfordledge.com/account](https://www.oxfordledge.com/account)). It is sent as the `x-api-key` header and it is what makes the tools **yours**:
 
-- **Without it**, this client is anonymous against the API. The free public-data tools (SEC EDGAR, FRED, Treasury, FINRA) still work — that is deliberate — but every tier-gated tool answers `AUTH_REQUIRED` telling you to set the key.
+- **Without it**, this client is anonymous against the API. The free public-data tools (SEC EDGAR, FRED, Treasury) still work — that is deliberate — but every tier-gated tool answers `AUTH_REQUIRED` telling you to set the key.
 - **With it**, tools resolve against your plan's tier, and calls are attributed to your account (see `/api/billing/agent-usage`). A trial key (`ol_trial_...`) works too — it lets you evaluate the paid tools for 14 days, no card, under a daily cap.
 
-### 2. Standalone mode — 6 tools, no Oxford Ledge account needed
+### 2. Standalone mode — 4 tools, no Oxford Ledge account needed
 
 A small subset of tools works without an Oxford Ledge instance — the ones backed by direct public APIs:
 
@@ -92,12 +92,12 @@ A small subset of tools works without an Oxford Ledge instance — the ones back
 }
 ```
 
-The six standalone tools split by their data source:
+The four standalone tools split by their data source:
 
-- **4 fully keyless** — `get_fundamentals` + `get_sec_filings` (direct SEC EDGAR) and `search_bonds` + `get_bond_data` (FINRA TRACE). No env var of any kind.
-- **2 require `FRED_API_KEY`** — `get_yield_curve` and `get_fred_data` call FRED directly and raise `ToolError.API_REQUIRED` with a "Set FRED_API_KEY" message if the key is unset. Get a free key at [fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html).
+- **2 fully keyless** — `get_fundamentals` + `get_sec_filings` (direct SEC EDGAR). No env var of any kind.
+- **2 require `FRED_API_KEY`** — `get_yield_curve` and `get_fred_data` call FRED directly and raise `ToolError.API_REQUIRED` with a "Set FRED_API_KEY" message if the key is unset. Get a free key at [fred.stlouisfed.org](https://fred.stlouisfed.org/docs/api/api_key.html). (`get_fred_data` serves U.S.-government / public-domain series only; third-party-copyright series — S&P, ICE BofA, Moody's, CBOE — are refused.)
 
-The other 10 tools raise `ToolError.API_REQUIRED` with a pointer to set `OXFORD_LEDGE_URL` when called in standalone mode. **This is a change from 1.x / 2.0.0**, which used yfinance to cover more standalone tools. That path was removed in 2.0.1 — see [MIGRATING.md](./MIGRATING.md) for the rationale.
+The other 9 tools raise `ToolError.API_REQUIRED` with a pointer to set `OXFORD_LEDGE_URL` when called in standalone mode. **This is a change from 1.x / 2.0.0**, which used yfinance to cover more standalone tools. That path was removed in 2.0.1 — see [MIGRATING.md](./MIGRATING.md) for the rationale.
 
 ### 3. Dev mode — in-tree from an Oxford Ledge checkout
 
@@ -123,11 +123,12 @@ After editing config, restart Claude Desktop. You'll see the tools available.
 
 ---
 
-## Available tools (16)
+## Available tools (13)
 
-`Mode` column: **S** = works in standalone (no OXFORD_LEDGE_URL required), **A** = API mode only. As of 3.0.0 **every tool is gov-public-data** (SEC EDGAR / FRED / Treasury / FINRA TRACE).
+`Mode` column: **S** = works in standalone (no OXFORD_LEDGE_URL required), **A** = API mode only. As of 3.1.0 **every tool is gov-public-data** (SEC EDGAR / FRED / Treasury), with third-party-copyright fields excluded — CUSIPs (FactSet IP) are stripped from 13F/event payloads, and S&P/ICE/Moody's/CBOE FRED series are refused.
 
-> **Removed — vendor-data lineage** (pin an older version if you need them):
+> **Removed — vendor / third-party-copyright lineage** (pin an older version if you need them):
+> **3.1.0** (CUSIP + FINRA-attribution carve-out): `search_bonds`, `get_bond_data` (bond CUSIPs are FactSet IP), `get_short_interest` (advertised stub, unresolved float-lineage + FINRA-attribution) — pin `==3.0.1`.
 > **3.0.0** (keyless-public cut): `get_stock_quote`, `get_financials`, `get_balance_sheet`,
 > `get_cash_flow`, `get_analyst_recommendations`, `get_company_info`, `compare_stocks`,
 > `screen_stocks`, `get_anomaly_flags`, `get_options_chain`, `get_economic_calendar`,
@@ -150,7 +151,7 @@ After editing config, restart Claude Desktop. You'll see the tools available.
 
 | Tool | Mode | Description |
 |------|:-:|-------------|
-| `get_13f_holdings` | A | Institutional 13F holdings from EDGAR |
+| `get_13f_holdings` | A | Institutional 13F holdings from EDGAR (CUSIPs stripped) |
 | `get_holders` | A | Top institutional shareholders (13F) |
 | `get_insider_trades` | A | Recent insider Form 4 buy/sell transactions |
 
@@ -158,22 +159,14 @@ After editing config, restart Claude Desktop. You'll see the tools available.
 
 | Tool | Mode | Description |
 |------|:-:|-------------|
-| `get_corporate_events` | A | M&A, executive changes, restructurings (8-K) |
-
-### Bonds & short interest — FINRA TRACE (3 tools)
-
-| Tool | Mode | Description |
-|------|:-:|-------------|
-| `search_bonds` | **S** | Search bond issuers via FINRA TRACE |
-| `get_bond_data` | **S** | Look up bonds by CUSIP (FINRA TRACE) |
-| `get_short_interest` | A | Short percent of float, days to cover (FINRA) |
+| `get_corporate_events` | A | M&A, executive changes, restructurings (8-K; CUSIPs/ratings stripped) |
 
 ### Macro — FRED / Treasury (2 tools)
 
 | Tool | Mode | Description |
 |------|:-:|-------------|
 | `get_yield_curve` | **S** | Treasury yield curve from FRED |
-| `get_fred_data` | **S** | Any FRED series (GDP, UNRATE, CPI, etc.) |
+| `get_fred_data` | **S** | U.S.-government FRED series (GDP, UNRATE, CPI, etc.); third-party-copyright series (S&P/ICE/Moody's/CBOE) refused |
 
 ### BDC & private credit — SEC / Oxford Ledge (2 tools)
 
@@ -192,11 +185,10 @@ After editing config, restart Claude Desktop. You'll see the tools available.
 
 ## Data sources
 
-Every tool is backed by **public data** — SEC EDGAR, FRED, U.S. Treasury, or FINRA TRACE. **Nothing in this package scrapes Yahoo Finance** (the 1.x / 2.0.0 yfinance path was removed in the 2.0.1 Y1 excision), and as of **3.0.0** there is **no commercial-vendor feed anywhere in the surface** (the FMP/Finnhub-backed quote/estimate/screen/news tools were removed — they live on the hosted Oxford Ledge MCP server).
+Every tool is backed by **public data** — SEC EDGAR, FRED, or U.S. Treasury. **Nothing in this package scrapes Yahoo Finance** (the 1.x / 2.0.0 yfinance path was removed in the 2.0.1 Y1 excision), and as of **3.0.0** there is **no commercial-vendor feed anywhere in the surface** (the FMP/Finnhub-backed quote/estimate/screen/news tools were removed — they live on the hosted Oxford Ledge MCP server). As of **3.1.0** the FINRA-sourced tools were also removed: bond search + CUSIP lookup (`search_bonds`/`get_bond_data`) disseminated FactSet-licensed CUSIPs, and `get_short_interest` was an advertised stub with unresolved float-lineage + attribution. FINRA data now lives only on the hosted server.
 
 - **SEC EDGAR** — XBRL fundamentals (`get_fundamentals`) and 10-K/10-Q/8-K filing lists (`get_sec_filings`) are fetched directly from EDGAR by the pip package (keyless). Insider Form 4 (`get_insider_trades`), 13F holdings (`get_13f_holdings` / `get_holders`), 8-K events (`get_corporate_events`), capital-allocation + debt-maturity XBRL, and BDC Schedule-of-Investments parses route through `OXFORD_LEDGE_URL` (API mode) against Oxford Ledge's EDGAR-backed tables.
-- **FINRA TRACE** — corporate bond search + CUSIP lookup (fetched directly, keyless) and short interest (API mode). Public data.
-- **FRED / U.S. Treasury** — Treasury yield curve + any FRED series, fetched directly. **Requires `FRED_API_KEY`** (`get_yield_curve` / `get_fred_data` error out without it).
+- **FRED / U.S. Treasury** — Treasury yield curve + any FRED series, fetched directly. **Requires `FRED_API_KEY`** (`get_yield_curve` / `get_fred_data` error out without it). `get_fred_data` serves U.S.-government / public-domain series only — third-party-copyright series (S&P, ICE BofA, Moody's, CBOE) are refused fail-closed.
 - **Oxford Ledge proprietary parses** — BDC holdings (54 BDCs, 9K+ borrowers, from SEC SoI filings) + the curated value-investing corpus. API mode only.
 
 ---

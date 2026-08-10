@@ -6,8 +6,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oxford-ledge-mcp"
-version = "3.0.1"
-description = "MCP server for Oxford Ledge financial terminal — 16 tools for stocks, SEC filings, credit data, bonds, macro indicators, and BDC holdings from Claude Desktop"
+version = "3.1.1"
+description = "MCP server for Oxford Ledge financial terminal — 13 gov-public-data tools for SEC filings, fundamentals, institutional & insider ownership, macro rates, and BDC/private-credit holdings from Claude Desktop"
 readme = "README.md"
 # PEP 639: SPDX expression + explicit license file (replaces the deprecated
 # `license = {text = "MIT"}` table + the `License ::` trove classifier).
@@ -17,7 +17,7 @@ requires-python = ">=3.9"
 authors = [
     {name = "Oxford Ledge", email = "contact@oxfordledge.com"},
 ]
-keywords = ["mcp", "finance", "stocks", "sec", "edgar", "bonds", "bdc", "credit", "claude", "anthropic"]
+keywords = ["mcp", "finance", "stocks", "sec", "edgar", "bdc", "credit", "fred", "claude", "anthropic"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -33,12 +33,12 @@ classifiers = [
 dependencies = []  # Y1 (2026-04-24): yfinance removed. Core stdlib only.
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.0.0"]
+mcp = ["mcp>=1.0.0,<2"]  # <2: the 2.0 major removed the low-level Server API this package uses (2026-08-10 vet, CHAOS pin)
 
 [project.urls]
 Homepage = "https://www.oxfordledge.com"
 Repository = "https://github.com/hs902/oxford-ledge-mcp"
-Documentation = "https://www.oxfordledge.com/llm-guide"
+Documentation = "https://www.oxfordledge.com/mcp"
 
 [project.scripts]
 oxford-ledge-mcp = "oxford_ledge_mcp.server:main"

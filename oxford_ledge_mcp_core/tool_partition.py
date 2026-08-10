@@ -43,17 +43,14 @@ from __future__ import annotations
 SHARED_TOOLS: frozenset[str] = frozenset({
     "get_13f_holdings",
     "get_bdc_list",
-    "get_bond_data",
     "get_capital_allocation",
     "get_corporate_events",
     "get_debt_maturities",
     "get_fred_data",
     "get_fundamentals",
-    "get_short_interest",
     "get_value_investing_fact",
     "get_yield_curve",
     "search_bdc_borrower",
-    "search_bonds",
 })
 
 # Tools present ONLY in the in-tree server (mcp_server.py).
@@ -71,6 +68,17 @@ IN_TREE_ONLY_TOOLS: frozenset[str] = frozenset({
     "get_news",
     "get_options_chain",
     "search_company",
+    # 2026-07-21 CUSIP carve-out: search_bonds/get_bond_data disseminate CUSIPs
+    # (FactSet / CUSIP Global Services IP — a third-party carve-out within FINRA
+    # data that needs a direct license for commercial redistribution). Removed from
+    # the gov-public-data-only PIP server; kept in the in-tree hosted server.
+    "search_bonds",
+    "get_bond_data",
+    # 2026-07-21 compliance review (CHAOS/DATA_CZAR/COUNSEL): get_short_interest is an
+    # advertised not_implemented stub with an unresolved float-lineage + FINRA-attribution
+    # question — removed from the pip surface until it's real (OWNER #23). Env-gated stub
+    # in-tree (also in IN_TREE_ENV_GATED_STUBS below).
+    "get_short_interest",
     "get_activist_stakes",        # MCP B.3 (#239) — new in-tree wrapper
     "get_ai_question",
     "get_fails_to_deliver",       # MCP B.3 (#239) — new in-tree wrapper
@@ -90,6 +98,8 @@ IN_TREE_ONLY_TOOLS: frozenset[str] = frozenset({
     "ol_patents",
     "ol_form_d_raises",
     "ol_insider_recent_buys",
+    "ol_short_interest_trend",
+    "ol_bdc_loan_pricing_trend",
     "ol_cftc_cot",
     "ol_treasury_debt",
     "ol_fdic_bank",
@@ -124,6 +134,12 @@ IN_TREE_ONLY_TOOLS: frozenset[str] = frozenset({
     # 13F-HR + Form 4 derived fusion) but PLUS-gated 2026-07-10 (OWNER) and
     # therefore OFF the free-only OAuth clean-core allowlist. READ.
     "ol_institutional_confluence",
+    # SF-MCP-WRITE Phase 2 (2026-07-27, #242, OWNER-ratified §7.1 Q7): the
+    # reference WRITE verb. PERMANENTLY in-tree-only — write capability never
+    # ships in the pip twin without its own CISO+COUNSEL+CHAOS vet (plan §9 +
+    # feedback_public_repo_persona_vet), and the whole write surface is dark
+    # until a deploy sets OL_MCP_WRITE_ENABLED=1.
+    "reading_list_annotate",
 })
 
 # Tools present ONLY in the pip-installable server. These are the

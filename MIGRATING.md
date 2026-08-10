@@ -41,7 +41,8 @@ argument schemas. Output shapes are byte-equivalent to 1.x.
 - **Modes** — standalone mode (no `OXFORD_LEDGE_URL`) and API mode (all 36
   tools with `OXFORD_LEDGE_URL` set) both still exist. NOTE: 2.0.1 removed
   yfinance, so standalone no longer covers the former 18 yfinance tools — it
-  now serves only the keyless public-API tools (FRED / FINRA TRACE / SEC).
+  now serves only the keyless public-API tools (FRED / SEC; the FINRA TRACE
+  bond tools were removed in 3.1.0 -- this line previously listed them).
   See the "2.0.1 — yfinance removed" section below.
 - **Environment variables** — same list (`OXFORD_LEDGE_URL`,
   `FRED_API_KEY`).
@@ -80,10 +81,15 @@ subprocess against the new version. Verify with a test prompt:
 If 2.0 breaks something for you:
 
 ```bash
-pip install "oxford-ledge-mcp<2.0"
+pip install "oxford-ledge-mcp==2.0.2"
 ```
 
-1.x installs stay available on PyPI indefinitely. Report the issue
+> [CORRECTED 2026-08-10: this section previously said `pip install
+> "oxford-ledge-mcp<2.0"` and claimed "1.x installs stay available on PyPI
+> indefinitely" -- PyPI has NO 1.x release (the earliest published version
+> is 2.0.0), so that rollback failed to resolve. 2.0.2 is the last 2.x.]
+
+Report the issue
 at https://github.com/hs902/OxfordLedge/issues so we can fix it in
 2.0.x.
 
@@ -216,6 +222,14 @@ when they land here).
 
 ## Version history
 
+- **3.1.0** (2026-07-21) — third-party-IP compliance sweep (CHAOS+DATA_CZAR+
+  COUNSEL vetted): `search_bonds` + `get_bond_data` removed (bond CUSIPs are
+  FactSet-licensed IP) and `get_short_interest` removed (advertised stub,
+  unresolved float-lineage + FINRA attribution); `get_13f_holdings` +
+  `get_corporate_events` now strip CUSIPs/ratings; `get_value_investing_fact`
+  repointed off a vendor endpoint; `get_fred_data` refuses third-party-copyright
+  FRED series (S&P/ICE/Moody's/CBOE) **fail-closed**. 13 tools. Pin `==3.0.1`
+  for the removed tools.
 - **3.0.0** (2026-07-21) — gov-public-data-only surface: 13 more vendor
   tools removed; the package is now 16 SEC/FRED/Treasury/FINRA tools. See above.
 - **2.1.0** (2026-07-21) — FMP-removal: 7 vendor-fed valuation/price
