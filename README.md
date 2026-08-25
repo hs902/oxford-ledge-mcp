@@ -1,7 +1,7 @@
 # Oxford Ledge MCP Server
 
 > **Last updated:** 2026-08-10
-> **Version:** 3.1.1 (gov-public-data-only surface; CUSIP + third-party-FRED carve-outs)
+> **Version:** 3.2.0 (gov-public-data-only surface; CUSIP + third-party-FRED carve-outs)
 
 Financial data tools for [Claude Desktop](https://claude.ai/download) via the [Model Context Protocol](https://modelcontextprotocol.io/).
 
@@ -199,9 +199,23 @@ Every tool is backed by **public data** — SEC EDGAR, FRED, or U.S. Treasury. *
 
 ---
 
-## Full Terminal
+## The Full Platform
 
 For the complete experience with 45+ databases, news archive, credit analysis, BDC data, and AI-powered analysis, visit [www.oxfordledge.com](https://www.oxfordledge.com).
+
+---
+
+## Disclaimer
+
+Oxford Ledge is a research and education platform for lifelong students and
+investors. This software is provided "as is", without warranty of any kind,
+under the MIT License (see LICENSE). It is an MCP server for accessing and
+parsing public financial data. **It is not investment, financial, legal, or
+tax advice, and nothing it returns is a recommendation to buy, sell, or hold
+any security.** Data may be incomplete, delayed, or inaccurate — SEC filings
+are periodic and lagged, and FRED series are revised. You are responsible for
+independently verifying anything you rely on and for your own investment
+decisions. Full terms: https://www.oxfordledge.com/terms
 
 ---
 

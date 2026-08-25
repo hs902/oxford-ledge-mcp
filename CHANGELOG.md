@@ -5,6 +5,67 @@ All notable changes to `oxford-ledge-mcp` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.2.0 (2026-08-24)
+
+Publish-vet-driven release (CISO+COUNSEL+CHAOS delta vet + the L-5
+disclosure CYCLE, both OWNER-ratified; artifacts in the main repo under
+docs/board/audit/2026-08-24_*). Everything below is wheel-shipping;
+in-tree-only work is deliberately not credited here.
+
+### Fixed
+
+- `get_fundamentals` OperatingCashFlow named a us-gaap concept that does
+  not exist (`NetCashProvidedByOperatingActivities` -- SEC 404s it), so
+  the field was silently absent on every call since it shipped. The
+  ladder now uses `NetCashProvidedByUsedInOperatingActivities` plus the
+  continuing-operations variant, both live-verified against SEC
+  companyconcept (134 + 30 facts on AAPL).
+- A second never-matching rung removed: `InvestmentIncomeOperating`
+  (BDC revenue) has zero filers in SEC frames CY2015+CY2023;
+  `GrossInvestmentIncomeOperating` (182 filers CY2023) carries BDC
+  revenue. The full concept ladder is now pinned against a reviewed,
+  evidence-backed set.
+- `get_yield_curve` declared `include_history` and never read it; the
+  parameter is now honoured. New response keys: `as_of` (per maturity),
+  `yield_curve_1y_ago` (present-even-when-empty so "applied and found
+  nothing" is distinguishable from "ignored"), `history_coverage`.
+- A 404 from a correctly-routed call whose filter matched nothing was
+  reported as a client/server version mismatch, steering agents away
+  from the one correct recovery (change the argument). The error path
+  now discriminates on the response envelope -- and parses the full
+  body, so large envelopes cannot regress it.
+- Auth errors named credentials in a way that led consuming agents to
+  ask their human to paste a key into the chat; every credential message
+  now names the operator + config as the source and forbids in-chat
+  solicitation.
+- `get_holders` / `get_insider_trades` read response keys the API never
+  emits; field chains now lead with the wire aliases actually served.
+- `get_value_investing_fact` promised an `available_categories` recovery
+  the API does not provide (removed) and declared a `query` parameter
+  the handler never read (removed). The documented category vocabulary
+  is now exactly the seven real values.
+- FRED error text can no longer embed the caller's own `api_key=`
+  (redacted before any exception message is emitted).
+
+### Added
+
+- Fail-closed per-tool emit allowlists at the redistribution boundary
+  (`oxford_ledge_mcp_core/emit_allowlist.py`): an unrecognized field is
+  dropped and a tool with no allowlist is refused with a structured
+  INTERNAL_ERROR, replacing the fail-open denylist for the raw
+  passthrough tools. `get_13f_holdings` keeps its full dating/identity
+  envelope (fund name, filing date, period of report, totals) and the
+  quarter-over-quarter changes tree; CUSIP remains excluded.
+- A not-advice disclosure: `## Disclaimer` in this README and a
+  server-level `instructions` string sent once at initialize on both
+  protocol paths (guarded on older `mcp` SDKs).
+
+### Changed
+
+- `oxford_ledge_mcp_core/tool_partition.py` no longer ships in the
+  wheel -- it was internal dead code (nothing in the package imports
+  it). No public API change.
+
 ## 3.1.1 (2026-08-10)
 
 Field-test-driven correctness release (2026-08-10 Desktop field tests #1/#2;

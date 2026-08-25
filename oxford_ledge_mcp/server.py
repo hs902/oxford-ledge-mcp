@@ -43,6 +43,7 @@ if _pkg_parent not in sys.path:
 
 import logging
 import math
+import re
 from typing import Any
 
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
@@ -87,6 +88,13 @@ _mcp_heavy_semaphore = threading.Semaphore(_MCP_HEAVY_MAX_CONCURRENT)
 # registry's set), so is_heavy was always False and the 2-slot heavy limit
 # never enforced. Import the real set; never re-declare it here.
 from oxford_ledge_mcp_core import _MCP_HEAVY_TOOLS
+# Fail-closed per-tool emit boundary (2026-08-10 allowlist inversion) --
+# shared with the future /api/mcp/tool bridge so both paths filter
+# through ONE table.
+from oxford_ledge_mcp_core.emit_allowlist import (
+    EmitAllowlistMissing,
+    filter_to_allowlist,
+)
 
 # Cache lock + dict (module-level for legacy callers; the core's
 # versions are canonical — these aliases point at the same objects).
@@ -370,8 +378,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "category": {"type": "string", "description": "Optional category: margin_of_safety, intrinsic_value, market_psychology, circle_of_competence, patience, contrarian, risk_management"},
-                "query": {"type": "string", "description": "Optional search query to find facts by keyword (e.g. 'moat', 'fear')"},
+                "category": {"type": "string", "description": "Optional category, matched case-insensitively. The vocabulary is EXACTLY: principle, historical_fact, psychology, quote, case_study, contrarian, mistake. An unknown value returns a no-data error -- retry with one of the listed values. CORRECTED 2026-08-11 -- six of the seven previously documented here never existed."},
             },
         },
     },
@@ -404,8 +411,16 @@ def _api_get(path, params=None, timeout=15):
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         body = ""
+        raw_body = ""
         try:
-            body = e.read().decode("utf-8")[:500]
+            # 3.2.0 vet K-7: parse-before-truncate. The 404 discriminator
+            # below json-parses this; truncating FIRST made any envelope
+            # over 500 bytes unparseable and mislabelled a data-level 404
+            # as a version mismatch (the exact bug the discriminator
+            # fixed, resurfacing on large bodies). Read bounded (64KB),
+            # parse the full read, truncate only what gets DISPLAYED.
+            raw_body = e.read(65536).decode("utf-8", "replace")
+            body = raw_body[:500]
         except Exception:
             pass
         # MONETIZE-2 (#121): give the AGENT an error it can act on. Every failure
@@ -414,6 +429,18 @@ def _api_get(path, params=None, timeout=15):
         # data isn't available", which is false and un-actionable: the model
         # retried, or told the user the filing didn't exist. Payment and auth are
         # not data problems.
+        # 2026-08-11: every credential message below names the OPERATOR as the
+        # source and forbids soliciting one in chat. These read as instructions
+        # to the caller, and the caller is a MODEL -- on the hosted twin an
+        # agent hit the sibling of this message and asked its human to paste "an
+        # X-API-Key or an OAuth bearer credential" into the conversation. That
+        # is phishing-shaped even when the error is honest, and it trains users
+        # to put secrets in a chat box. Credentials here are env vars set once
+        # in the client's own config; the end user is never the right source.
+        _NO_ASK = (" DO NOT ASK THE USER TO PASTE A KEY OR TOKEN INTO THE "
+                   "CONVERSATION -- it is an environment variable the client's "
+                   "operator sets, and a credential sent in chat is a security "
+                   "problem, not a fix.")
         if e.code == 402:
             raise ToolError(
                 ToolError.AUTH_REQUIRED,
@@ -421,15 +448,18 @@ def _api_get(path, params=None, timeout=15):
                 + ("Your API key's plan does not include it — see "
                    "https://www.oxfordledge.com/pricing."
                    if _API_KEY else
-                   "Set OXFORD_LEDGE_API_KEY (create a key at "
-                   "https://www.oxfordledge.com/account) — without one this client "
-                   "is anonymous and only the free public-data tools work."),
+                   "The client's operator sets OXFORD_LEDGE_API_KEY (keys are "
+                   "created at https://www.oxfordledge.com/account) — without "
+                   "one this client is anonymous and only the free public-data "
+                   "tools work.")
+                + _NO_ASK,
             )
         if e.code in (401, 403):
             raise ToolError(
                 ToolError.AUTH_REQUIRED,
                 "Oxford Ledge rejected the credentials for this tool "
-                f"({e.code}). Check OXFORD_LEDGE_API_KEY is set and not revoked.",
+                f"({e.code}). The client's operator should check "
+                "OXFORD_LEDGE_API_KEY is set and not revoked." + _NO_ASK,
             )
         if e.code == 429:
             retry_after = None
@@ -446,6 +476,43 @@ def _api_get(path, params=None, timeout=15):
             # Same reasoning that earned 402 its own code: a 404 on a path is
             # a client/server version mismatch (developer bug), not "the data
             # doesn't exist" — never launder it as DATA_UNAVAILABLE.
+            #
+            # 2026-08-11: but the server uses 404 for BOTH. A route answers
+            # 404 through the unified error envelope when a FILTER matched
+            # nothing (the envelope helper REWRITES unmatched messages to a
+            # status-code default, so the agent sees generic no-data text,
+            # not the route's literal -- 3.2.0 vet K-7 corrected the account
+            # here that claimed otherwise), so a
+            # perfectly-routed call with an unknown `category` was reported to
+            # the agent as "this endpoint does not exist" — and the directive
+            # below ("report it rather than retrying") steered it AWAY from the
+            # one correct recovery, which was to try another category. Two
+            # individually-defensible decisions producing a confident lie.
+            #
+            # Discriminate on the BODY, which is unambiguous: our own handlers
+            # emit the unified envelope {error, message, status, request_id}
+            # (the server's shared error-envelope helper), whereas an unrouted path
+            # gets FastAPI's default {"detail": "Not Found"}. A data-level 404
+            # therefore carries `error` + `status`; a routing 404 does not.
+            _envelope = None
+            try:
+                _parsed = json.loads(raw_body)
+                if isinstance(_parsed, dict) and "error" in _parsed \
+                        and "status" in _parsed:
+                    _envelope = _parsed
+            except Exception:
+                _envelope = None
+            if _envelope is not None:
+                # Routed fine; the FILTER matched nothing. Actionable by
+                # changing arguments, so it must not read as a broken build.
+                raise ToolError(
+                    ToolError.DATA_UNAVAILABLE,
+                    f"No data matched this request: "
+                    f"{_envelope.get('message') or _envelope.get('error')} "
+                    f"(the endpoint exists and responded — adjust the "
+                    f"arguments, e.g. a different category/filter value, "
+                    f"rather than reporting a version mismatch).",
+                )
             raise ToolError(
                 ToolError.NOT_FOUND,
                 f"HTTP 404 for {path} — this endpoint does not exist on the "
@@ -486,9 +553,13 @@ def tool_get_holders(args):
     holders = []
     for row in raw[:10]:
         holders.append({
-            "holder": row.get("holder") or row.get("name", ""),
+            # Field test #3 (2026-08-10): the live rows carry fund_name /
+            # value_usd (data/institutional_holdings.get_institutional_holders)
+            # -- the old chain read keys this route never emits, so holder
+            # rendered "" beside correct share counts.
+            "holder": str(row.get("fund_name") or row.get("holder") or row.get("name") or ""),
             "shares": _safe(row.get("shares")),
-            "value": _safe(row.get("value")),
+            "value": _safe(row.get("value_usd") or row.get("value")),
             "type": "institutional",
         })
     return {"ticker": ticker, "holders": holders}
@@ -545,11 +616,16 @@ def tool_get_insider_trades(args):
         # transactionType) — the old chains read keys the API never emits,
         # so every row rendered an empty insider + type beside real shares.
         trades.append({
+            # Field test #3: /api/insider-activity rows come from
+            # pg_get_insider_activity, whose SQL aliases are the wire SOT:
+            # transType / filingDate / totalValue (insiderName was right).
+            # The InsiderActivityTxn schema keys belong to a different route
+            # family -- pin to the helper's aliases, not the lookalike model.
             "insider": str(row.get("insiderName") or row.get("insider") or row.get("name") or row.get("reportingOwner") or ""),
             "shares": _safe(row.get("shares") or row.get("transactionShares")),
-            "value": _safe(row.get("value") or row.get("transactionValue")),
-            "type": row.get("transactionType") or row.get("type") or row.get("transactionCode") or "",
-            "date": row.get("date") or row.get("transactionDate") or "",
+            "value": _safe(row.get("totalValue") or row.get("value") or row.get("transactionValue")),
+            "type": row.get("transType") or row.get("transactionType") or row.get("type") or row.get("transactionCode") or "",
+            "date": row.get("filingDate") or row.get("date") or row.get("transactionDate") or "",
         })
     return {"ticker": ticker, "trades": trades}
 
@@ -585,14 +661,26 @@ def tool_get_fundamentals(args):
         # Extract key line items
         line_items = {
             "Revenue": ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet",
-                        # investment companies (BDCs) tag revenue as total investment income
-                        "InvestmentIncomeOperating", "GrossInvestmentIncomeOperating"],
+                        # investment companies (BDCs) tag revenue as gross
+                        # investment income. 3.2.0 vet K-6 execution removed
+                        # the sibling rung InvestmentIncomeOperating here:
+                        # SEC frames CY2015+CY2023 report ZERO filers for it
+                        # and both flagship BDC companyconcepts 404 -- a
+                        # never-matching rung (the OCF defect class), while
+                        # this one shows 182 filers in CY2023.
+                        "GrossInvestmentIncomeOperating"],
             "NetIncome": ["NetIncomeLoss"],
             "EPS": ["EarningsPerShareDiluted", "EarningsPerShareBasic"],
             "TotalAssets": ["Assets"],
             "TotalLiabilities": ["Liabilities"],
             "StockholdersEquity": ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
-            "OperatingCashFlow": ["NetCashProvidedByOperatingActivities"],
+            # 2026-08-24 MCP audit: the old sole rung named a NON-EXISTENT
+            # us-gaap concept (SEC companyconcept 404-verified) -- the same
+            # never-matching-rung class as the in-tree sharesOut fix. The
+            # real concept, plus the continuing-operations variant some
+            # filers use.
+            "OperatingCashFlow": ["NetCashProvidedByUsedInOperatingActivities",
+                                  "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"],
             "TotalDebt": ["LongTermDebt", "LongTermDebtNoncurrent"],
         }
 
@@ -654,36 +742,114 @@ def tool_get_fundamentals(args):
         raise ToolError(ToolError.DATA_UNAVAILABLE, f"EDGAR XBRL lookup failed for '{ticker}': {e}")
 
 
+#: Trading days pulled per series when the caller asks for history. ~252 in a
+#: year; 400 covers a year plus the slack for holidays and a stale tail without
+#: a second request per series.
+_YC_HISTORY_LIMIT = 400
+#: How far a matched "a year ago" observation may sit from the 365-day target
+#: before it is refused. A curve is only comparable against a real prior point;
+#: silently pairing today against a value 5 months old would answer the
+#: steepening question with a number that does not mean what it says.
+_YC_LOOKBACK_TOLERANCE_DAYS = 45
+
+
+def _yc_pick_year_ago(observations, latest_date):
+    """The observation closest to one year before ``latest_date``, or None.
+
+    ``observations`` is FRED's newest-first list. Returns None rather than the
+    nearest available point when nothing lands within the tolerance -- a
+    comparison against whatever happens to be oldest is worse than no
+    comparison, because the caller cannot see how far off it is.
+    """
+    import datetime as _dt
+
+    try:
+        anchor = _dt.date.fromisoformat(latest_date) - _dt.timedelta(days=365)
+    except (TypeError, ValueError):
+        return None
+    best, best_gap = None, None
+    for o in observations:
+        if o.get("value") in (None, ".", ""):
+            continue
+        try:
+            d = _dt.date.fromisoformat(o.get("date", ""))
+        except ValueError:
+            continue
+        gap = abs((d - anchor).days)
+        if best_gap is None or gap < best_gap:
+            best, best_gap = o, gap
+    if best is None or best_gap > _YC_LOOKBACK_TOLERANCE_DAYS:
+        return None
+    return best
+
+
 @mcp_tool(name="get_yield_curve", cache=FUNDAMENTAL)
 def tool_get_yield_curve(args):
-    """Get Treasury yield curve from FRED."""
+    """Get Treasury yield curve from FRED.
+
+    include_history=true adds the same curve as of ~1 year ago, for
+    steepening/inversion work.
+
+    2026-08-11 (#30): this handler did not read `args` AT ALL, while its
+    inputSchema declared `include_history`. The dispatcher's own contract
+    (`_echo_params_accepted`, mcp_server.py) is deliberately named
+    params_ACCEPTED rather than honored because a downstream hop can drop a
+    value it validated -- and this was a live instance of exactly that gap: a
+    caller passed include_history, saw it echoed as accepted, and got the
+    current curve regardless. Closing it per-tool is what that docstring
+    prescribes.
+
+    History costs no extra REQUESTS. The same one-call-per-series loop asks for
+    a wider window and reads both ends out of it, so the difference is response
+    size rather than round trips.
+    """
     fred_key = os.environ.get("FRED_API_KEY", "")
     if not fred_key:
         raise ToolError(ToolError.API_REQUIRED, "Set FRED_API_KEY environment variable for yield curve data")
+    include_history = bool(args.get("include_history", False))
     series_ids = {
         "1M": "DGS1MO", "3M": "DGS3MO", "6M": "DGS6MO",
         "1Y": "DGS1", "2Y": "DGS2", "3Y": "DGS3", "5Y": "DGS5",
         "7Y": "DGS7", "10Y": "DGS10", "20Y": "DGS20", "30Y": "DGS30",
     }
-    curve = {}
+    limit = _YC_HISTORY_LIMIT if include_history else 1
+    curve, year_ago, as_of = {}, {}, {}
     for label, sid in series_ids.items():
         try:
             url = (
                 f"https://api.stlouisfed.org/fred/series/observations"
                 f"?series_id={sid}&api_key={fred_key}&file_type=json"
-                f"&sort_order=desc&limit=1"
+                f"&sort_order=desc&limit={limit}"
             )
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             obs = data.get("observations", [])
-            if obs and obs[0].get("value") != ".":
-                curve[label] = float(obs[0]["value"])
+            if not obs or obs[0].get("value") == ".":
+                continue
+            curve[label] = float(obs[0]["value"])
+            as_of[label] = obs[0].get("date")
+            if include_history:
+                prior = _yc_pick_year_ago(obs[1:], obs[0].get("date"))
+                if prior:
+                    year_ago[label] = float(prior["value"])
         except Exception:
             continue
     if not curve:
         raise ToolError(ToolError.DATA_UNAVAILABLE, "Could not fetch yield curve data from FRED")
-    return {"yield_curve": curve, "source": "FRED"}
+    out = {"yield_curve": curve, "as_of": as_of, "source": "FRED"}
+    if include_history:
+        # Emitted even when EMPTY, and that is deliberate: the caller asked for
+        # history, so the key must be present to say it was applied. Omitting
+        # it on a miss is indistinguishable from ignoring the parameter, which
+        # is the bug being fixed.
+        out["yield_curve_1y_ago"] = year_ago
+        out["history_coverage"] = {
+            "maturities_with_prior": len(year_ago),
+            "maturities_total": len(curve),
+            "lookback_tolerance_days": _YC_LOOKBACK_TOLERANCE_DAYS,
+        }
+    return out
 
 
 # Third-party / copyrighted FRED-series carve-out (3.1.0; hardened FAIL-CLOSED per the
@@ -714,6 +880,13 @@ _FRED_GOV_PREFIXES = (
     "PAYEMS", "T10Y", "T5Y", "DTB", "TB3MS", "DFEDTAR", "DEXUS", "DEXJP", "DEXCH",
     "M1SL", "M2SL", "HOUST", "RSAFS", "INDPRO", "PPIACO", "MICH", "RRPONTSYD", "WALCL")
 _fred_thirdparty_cache: dict[str, bool] = {}
+
+
+def _scrub_fred_key(text: str) -> str:
+    """3.2.0 vet C-6 (defense-in-depth): FRED's documented auth rides the
+    query string, so a urllib error repr can embed the caller's own key.
+    Redact it before any exception text reaches a tool message."""
+    return re.sub(r"api_key=[^&\s'\"]+", "api_key=REDACTED", text)
 
 
 def _fred_series_is_thirdparty(series: str, key: str) -> bool:
@@ -779,7 +952,7 @@ def tool_get_fred_data(args):
     except ToolError:
         raise
     except Exception as e:
-        raise ToolError(ToolError.DATA_UNAVAILABLE, f"FRED data fetch failed for '{series}': {e}")
+        raise ToolError(ToolError.DATA_UNAVAILABLE, f"FRED data fetch failed for '{series}': {_scrub_fred_key(str(e))}")
 
 
 # ── API-mode tool implementations ────────────────────────────────────────────
@@ -793,9 +966,13 @@ def tool_get_corporate_events(args):
     # live route is /api/company/events, param name `type`) — 404'd always.
     if args.get("event_type"):
         params["type"] = args["event_type"]
-    # Defense-in-depth: strip any third-party identifier/rating field an overlay might
-    # carry (SEC 8-K itself is public domain).
-    return _strip_carveout_ids(_api_get("/api/company/events", params))
+    # Emit boundary (2026-08-10 allowlist inversion, oxford_ledge_mcp_core.
+    # emit_allowlist): fail-CLOSED per-tool allowlist is the primary filter --
+    # an unrecognized field is dropped, never shipped. The carve-out strip
+    # stays as defense-in-depth (its key set also validates the allowlists
+    # at import time, so the two can never drift apart).
+    return _strip_carveout_ids(filter_to_allowlist(
+        "get_corporate_events", _api_get("/api/company/events", params)))
 
 
 @mcp_tool(name="search_bdc_borrower", cache=FUNDAMENTAL)
@@ -837,9 +1014,12 @@ def tool_get_13f_holdings(args):
     params = {"cik": fund}
     if args.get("max_holdings"):
         params["max_holdings"] = str(int(args["max_holdings"]))
-    # Strip CUSIPs (FactSet/CGS IP) from the 13F payload before redistribution —
-    # the same carve-out that removed the bond tools in 3.1.0.
-    return _strip_carveout_ids(_api_get("/api/fund-holdings", params))
+    # Emit boundary (2026-08-10 allowlist inversion): fail-CLOSED per-tool
+    # allowlist first (`cusip` is deliberately absent from it -- the FactSet/
+    # CGS carve-out that removed the bond tools in 3.1.0), carve-out strip
+    # retained as defense-in-depth.
+    return _strip_carveout_ids(filter_to_allowlist(
+        "get_13f_holdings", _api_get("/api/fund-holdings", params)))
 
 
 @mcp_tool(name="get_value_investing_fact", cache=STATIC)
@@ -942,6 +1122,18 @@ def _execute_tool_with_limits(tool_name, args):
         return result
     except ToolError:
         raise
+    except EmitAllowlistMissing as e:
+        # 3.2.0 vet K-2b: fail-closed stays fail-closed, but with a
+        # structured code instead of a bare INTERNAL_ERROR re-raise. The
+        # code is INTERNAL_ERROR deliberately (not DATA_UNAVAILABLE: the
+        # data exists -- the PACKAGE is misconfigured, same honesty rule
+        # that keeps a routing 404 out of DATA_UNAVAILABLE).
+        raise ToolError(
+            ToolError.INTERNAL_ERROR,
+            f"{tool_name} reached the redistribution boundary without an "
+            "emit allowlist -- a packaging defect, not missing data. "
+            "Report it to the package maintainer; retrying or changing "
+            "arguments will not help.")
     except TimeoutError as e:
         raise ToolError(ToolError.TIMEOUT, str(e))
     except ValueError as e:
@@ -961,6 +1153,21 @@ def _execute_tool_with_limits(tool_name, args):
 
 # ── JSON-RPC MCP Protocol ────────────────────────────────────────────────────
 
+# Server-level disclosure, sent ONCE at initialize (L-5 CYCLE, OWNER-
+# ratified 2026-08-24, option e-prime Layer 2). Property register, never
+# imperative -- an instruction-shaped sentence in the system prompt reads
+# as a script and gets parroted (CHAOS K-D). Per-payload short form is
+# the queued Layer 3, not this.
+SERVER_INSTRUCTIONS = (
+    "Oxford Ledge MCP provides public U.S. financial data -- SEC EDGAR "
+    "filings and XBRL fundamentals, institutional and insider ownership, "
+    "BDC private-credit holdings, and FRED/Treasury macro series. All "
+    "figures are as-filed or as-published and may be lagged, revised, or "
+    "incomplete; SEC ownership filings are periodic and can be up to 45 "
+    "days behind. This data is informational only and is not investment, "
+    "financial, legal, or tax advice. Terms: "
+    "https://www.oxfordledge.com/terms")
+
 def handle_request(req):
     method = req.get("method", "")
     req_id = req.get("id")
@@ -976,6 +1183,7 @@ def handle_request(req):
                 # full field-test audit to a stale-build ambiguity. Contract-
                 # pinned to __version__ so it can never drift again.
                 "serverInfo": {"name": "oxford-ledge-mcp", "version": __version__},
+                "instructions": SERVER_INSTRUCTIONS,
             },
         }
 
@@ -1079,6 +1287,11 @@ def main():
                 init_opts = server.create_initialization_options()
                 init_opts.server_name = "oxford-ledge-mcp"
                 init_opts.server_version = __version__
+                # Guarded: `instructions` presence on mcp 1.0.0 is
+                # NOT-VERIFIED; a crash at startup is strictly worse
+                # than a session without the disclosure (L-5 Layer 2).
+                if hasattr(init_opts, "instructions"):
+                    init_opts.instructions = SERVER_INSTRUCTIONS
                 await server.run(read_stream, write_stream, init_opts)
 
         asyncio.run(run())

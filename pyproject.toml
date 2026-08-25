@@ -6,8 +6,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oxford-ledge-mcp"
-version = "3.1.1"
-description = "MCP server for Oxford Ledge financial terminal — 13 gov-public-data tools for SEC filings, fundamentals, institutional & insider ownership, macro rates, and BDC/private-credit holdings from Claude Desktop"
+version = "3.2.0"
+description = "MCP server for Oxford Ledge — 13 gov-public-data tools for SEC filings, fundamentals, institutional & insider ownership, macro rates, and BDC/private-credit holdings from Claude Desktop"
 readme = "README.md"
 # PEP 639: SPDX expression + explicit license file (replaces the deprecated
 # `license = {text = "MIT"}` table + the `License ::` trove classifier).
