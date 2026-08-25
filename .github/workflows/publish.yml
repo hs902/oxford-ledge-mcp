@@ -41,12 +41,31 @@ jobs:
           WHL="$(ls dist/*.whl)"
           echo "Inspecting $WHL"
           python -m zipfile -l "$WHL" | tee /tmp/whl.txt
-          if grep -qE 'tools_manifest\.py|(^|/)services/|(^|/)\.env|(^|/)\.pypirc|tests/' /tmp/whl.txt; then
-            echo "FAIL: wheel contains a forbidden file (manifest/services/secret/tests)"; exit 1
+          if grep -qE 'tools_manifest\.py|tool_partition\.py|(^|/)services/|(^|/)\.env|(^|/)\.pypirc|tests/' /tmp/whl.txt; then
+            echo "FAIL: wheel contains a forbidden file (manifest/partition/services/secret/tests)"; exit 1
           fi
           grep -q 'oxford_ledge_mcp_core/ticker\.py' /tmp/whl.txt || { echo "FAIL: ticker.py missing"; exit 1; }
           grep -q 'LICENSE' /tmp/whl.txt || { echo "FAIL: LICENSE missing"; exit 1; }
           echo "OK: wheel content assertions passed"
+      - name: Assert clean wheel CONTENT (C-4, 3.2.0 vet)
+        # The step above greps the archive LISTING -- a secret, an internal
+        # import, or the moat write-gate INSIDE a permitted file passes it.
+        # This extracts the wheel and scans file content. Sibling of the
+        # monorepo test_mcp_oss_twin_parity_contract content scan.
+        run: |
+          set -euo pipefail
+          WHL="$(ls dist/*.whl)"
+          EX=/tmp/whl_x; rm -rf "$EX"; mkdir -p "$EX"
+          python -m zipfile -e "$WHL" "$EX"
+          fail=0
+          if grep -rnE "sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY|ol_live_[0-9a-f]{8,}" "$EX"; then
+            echo "FAIL: secret-shaped content inside the wheel"; fail=1; fi
+          if grep -rnE "^\s*(from|import)\s+(services|pg_db|routes|middleware|schemas|learn|oxford_ledge_db)\b" "$EX" --include="*.py"; then
+            echo "FAIL: monorepo upward import inside the wheel"; fail=1; fi
+          if grep -rn "OL_MCP_WRITE_ENABLED" "$EX"; then
+            echo "FAIL: the moat write-gate env var ships (tool_partition leak sentinel)"; fail=1; fi
+          [ "$fail" -eq 0 ] && echo "OK: wheel content scan clean"
+          exit "$fail"
       - name: twine check
         run: python -m twine check dist/*
       - name: Upload built distributions
