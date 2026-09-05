@@ -1,6 +1,6 @@
 """Oxford Ledge MCP Server — financial data tools for Claude Desktop.
 
-Provides 13 gov-public-data tools for querying SEC filings & fundamentals,
+Provides 18 gov-public-data tools for querying SEC filings & fundamentals,
 institutional & insider ownership, BDC/private-credit holdings, and macro
 rates. As of 3.1.0 this is a gov-public-data-only surface (SEC EDGAR / FRED /
 U.S. Treasury) — no commercial-vendor feed, and third-party-copyright fields
@@ -8,10 +8,10 @@ U.S. Treasury) — no commercial-vendor feed, and third-party-copyright fields
 
 Two modes:
   1. **API mode** (required for most tools): Set OXFORD_LEDGE_URL to your
-     running Oxford Ledge instance. All 13 tools are available.
+     running Oxford Ledge instance. All 18 tools are available.
   2. **Standalone mode**: no server needed; 4 tools work directly against
      public APIs (2 keyless SEC EDGAR: get_fundamentals/get_sec_filings;
-     2 FRED via FRED_API_KEY: get_yield_curve/get_fred_data). The other 9
+     2 FRED via FRED_API_KEY: get_yield_curve/get_fred_data). The other 14
      tools raise ToolError.API_REQUIRED in this mode and direct the user to
      set OXFORD_LEDGE_URL.
 
@@ -80,7 +80,7 @@ _mcp_heavy_semaphore = threading.Semaphore(_MCP_HEAVY_MAX_CONCURRENT)
 #
 # Tool registrations are now done via @mcp_tool decorators on each
 # `def tool_X(args):` function, which populate the core's REGISTRY at
-# module-import time. Claude Desktop sees the current 13-tool gov-public
+# module-import time. Claude Desktop sees the current 18-tool gov-public
 # surface; behavior is byte-equivalent per contract.
 
 # CHAOS-3 (2026-08-10 vet): this WAS a local empty shadow ("populated by
@@ -166,7 +166,7 @@ def _strip_carveout_ids(obj: Any) -> Any:
     return obj
 
 
-# ── Tool definitions (13 gov-public tools) ───────────────────────────────────
+# ── Tool definitions (18 gov-public tools) ───────────────────────────────────
 #
 # NOTE 2026-05-07: read-only consumers (the public /mcp catalog route, SSR
 # renderer) MUST import from the manifest module, NOT from here — importing
@@ -191,6 +191,9 @@ def _strip_carveout_ids(obj: Any) -> Any:
 # /api/mcp/tool passthrough bridge is the OWNER-gated package-republish
 # follow-on (task_queue #93); the drift gate deliberately does not equate
 # this list with the manifest until that repair ships.
+# (2026-09-05: the three promoted ol_bdc_* moat tools now USE that
+# name-proxy bridge -- _api_tool_call below -- per the moat-promotion vet;
+# the pre-existing REST-route handlers are unchanged.)
 
 TOOLS = [
     # ── Core company data (API-mode via OXFORD_LEDGE_URL; Y1 2026-04-24) ──
@@ -238,7 +241,9 @@ TOOLS = [
             "Get XBRL-parsed financial statements from SEC EDGAR for a ticker. "
             "Returns up to 10 years of revenue, net income, EPS, operating cash "
             "flow, total assets, total debt, and other key line items."
-        ),
+            " NOTE: for investment companies (BDCs, closed-end funds), OperatingCashFlow"
+            " is routinely NEGATIVE because portfolio purchases run through operating"
+            " activities under ASC 946 -- it is not a distress signal there."),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -283,14 +288,23 @@ TOOLS = [
     {
         "name": "get_corporate_events",
         "description": (
-            "Get corporate events for a ticker: M&A activity, executive changes, "
-            "restructurings, dividend changes, and other material events. [Requires API mode]"
+            "Get corporate events for a ticker from SEC filings and announcements "
+            "(8-K item index, earnings dates, dividends, splits, mergers). "
+            "[Requires API mode]"
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL)"},
-                "event_type": {"type": "string", "description": "Optional filter: acquisition, divestiture, executive_change, restructuring, dividend, or ALL"},
+                # 2026-09-05 (field-test F8, Pattern-T CONFIRMED): the prior
+                # advertised vocabulary (acquisition/divestiture/executive_change/
+                # restructuring/ALL) matched NOTHING the route accepts -- four of
+                # six documented values 400'd, and even "ALL" failed (the route
+                # is lowercase-only). This enum IS the route's _VALID_EVENT_TYPES;
+                # parity contract-pinned in the main repo.
+                "event_type": {"type": "string",
+                               "enum": ["earnings", "dividend", "split", "merger", "all"],
+                               "description": "Optional filter (lowercase): earnings, dividend, split, merger, or all"},
             },
             "required": ["ticker"],
         },
@@ -319,6 +333,45 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {},
+        },
+    },
+    {
+        "name": "get_bdc_borrower_mark_history",
+        "description": (
+            "Multi-quarter fair-value mark history for one borrower across every "
+            "BDC that holds its debt: per-quarter min/max and par-weighted "
+            "average marks (percent of par, 2dp), tranche and holder counts, and "
+            "the contributing BDC tickers. Derived from SEC EDGAR "
+            "Schedule-of-Investments filings (public domain). Exact "
+            "borrower_norm match only -- resolve the key with "
+            "search_bdc_borrower first; an unknown key returns an empty series "
+            "with a note, not an error. [Requires API mode]"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "borrower_norm": {"type": "string", "description": "Normalized borrower key, matched EXACTLY (take borrowerNorm from a search_bdc_borrower result)"},
+                "quarters": {"type": "integer", "minimum": 1, "maximum": 16, "default": 8, "description": "Most-recent quarters to return (1-16, default 8)"},
+            },
+            "required": ["borrower_norm"],
+        },
+    },
+    {
+        "name": "get_bdc_holdings",
+        "description": (
+            "Full portfolio holdings for one BDC's latest SEC filing: borrower, "
+            "industry, security type, lien position, rate, maturity, par/cost/"
+            "fair value and mark per position, plus portfolio-level totals and "
+            "structure metrics (floating-rate %, senior-secured %, equity %, "
+            "PIK count). Derived from SEC EDGAR Schedule-of-Investments filings "
+            "(10-Q/10-K, public domain). [Requires API mode]"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "BDC ticker symbol (e.g. ARCC, OBDC — see get_bdc_list)"},
+            },
+            "required": ["ticker"],
         },
     },
     {
@@ -380,6 +433,157 @@ TOOLS = [
             "properties": {
                 "category": {"type": "string", "description": "Optional category, matched case-insensitively. The vocabulary is EXACTLY: principle, historical_fact, psychology, quote, case_study, contrarian, mistake. An unknown value returns a no-data error -- retry with one of the listed values. CORRECTED 2026-08-11 -- six of the seven previously documented here never existed."},
             },
+        },
+    },
+    # ── 2026-09-05 moat promotion (docs/board/audit/
+    # 2026-09-05_CISO_COUNSEL_CHAOS_moat_promotion_vet.md, OWNER-ratified):
+    # three BDC moat tools promoted from IN_TREE_ONLY as thin name-proxies
+    # to the hosted MCP dispatch. Descriptions/schemas are COPIED from the
+    # reviewed in-tree literals (mcp_tool_definitions.py -- vet L-4:
+    # "the reviewed text is the asset, re-authoring is the risk"), adjusted
+    # ONLY for transport facts: the "<400ms typical" latency claims are
+    # dropped (false through an HTTP proxy hop), and each description names
+    # the completeness-block semantics (vet K-6) since the hosted caps
+    # CLAMP rather than reject.
+    {
+        "name": "ol_bdc_top_borrowers",
+        "description": (
+            "MOAT / BDC discovery: the private-credit borrowers syndicated "
+            "across the MOST BDCs, ranked by lender count then exposure -- the "
+            "entrypoint for the BDC/private-credit category no generic MCP "
+            "touches. Pairs with `ol_bdc_borrower_dispersion` (feed a returned "
+            "`borrower_norm` into it to see cross-lender pricing). Returns "
+            "{summary, count, borrowers}; each row is {borrower (display name), "
+            "borrower_norm (the key other ol_bdc_* tools take), holder_count "
+            "(distinct BDC lenders), total_fair_value (whole USD across "
+            "lenders, latest filings; null when unpriced), industry}. Caps: "
+            "limit default 25 / hard 100; min_holders default 2 (max 50). "
+            "Parser mis-ingests (subtotals, maturity-date and instrument-"
+            "descriptor rows) are filtered out, so the returned count is clean "
+            "borrowers only. TRUNCATION: the `completeness` block in the "
+            "payload is the runtime truth -- complete=true means under-cap "
+            "(this IS everything), complete=false means a known total exceeds "
+            "the page, complete=null means exactly-at-cap and genuinely "
+            "undecidable (read `more_available_hint`). An out-of-range `limit` "
+            "is CLAMPED to the cap server-side, not rejected, so the schema "
+            "maximum is documentation and `completeness` is the check. Source: "
+            "SEC EDGAR BDC schedules of investments (Oxford Ledge parse); "
+            "FREE. [Requires API mode]"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "min_holders": {
+                    "type": "integer",
+                    "description": "Minimum number of BDC lenders a borrower must appear in (default 2).",
+                    "maximum": 50,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max borrowers to return (default 25, hard cap 100).",
+                    "maximum": 100,
+                },
+            },
+        },
+    },
+    {
+        "name": "ol_bdc_borrower_dispersion",
+        "description": (
+            "MOAT: cross-lender loan-pricing DISPERSION for one private-credit "
+            "borrower -- how N different BDCs each price the SAME loan (spread / "
+            "mark / fair value). The credit-mispricing signal no generic MCP "
+            "has: when one BDC marks a borrower S+550 @ 98 and another S+575 @ "
+            "99, the lenders disagree on the credit. Pass the borrower's "
+            "canonical `borrower_norm` key (from `ol_bdc_top_borrowers` or "
+            "`search_bdc_borrower`). Returns {summary, borrower_norm, count, "
+            "lenders}, ordered widest-spread-first; each lender row is "
+            "{bdc_ticker, filing_date, security_type, lien_position, spread, "
+            "marked_price, fair_value}. UNITS TRAP: `spread` is the RAW AS-FILED "
+            "number and is MIXED-UNIT across filers -- one BDC files 5.75 "
+            "(percent) for what another files as 575 (bps). Ranking is done on a "
+            "normalised basis internally, but the emitted `spread` is not "
+            "normalised, so read each value against its own filer and do NOT "
+            "average or diff them blind. marked_price is out of 100; fair_value "
+            "is whole USD. Debt tranches only (equity excluded). Rows are each "
+            "BDC's most recent filing THAT HOLDS this borrower, so vintages can "
+            "differ across lenders and a wound-down lender's frozen final filing "
+            "can still appear. Default 25 rows, hard cap 100. Honest-empty when "
+            "only one BDC holds the name. TRUNCATION: the `completeness` block "
+            "in the payload is the runtime truth -- complete=true means "
+            "under-cap, complete=null means exactly-at-cap and undecidable "
+            "(read `more_available_hint`); an out-of-range `limit` is CLAMPED "
+            "server-side, not rejected. Source: SEC EDGAR BDC schedules of "
+            "investments (Oxford Ledge parse); FREE. [Requires API mode]"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "borrower_norm": {
+                    "type": "string",
+                    "description": "Canonical normalized borrower key (from ol_bdc_top_borrowers or borrower search).",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max lender positions to return (default 25, hard cap 100).",
+                    "maximum": 100,
+                },
+            },
+            "required": ["borrower_norm"],
+        },
+    },
+    {
+        "name": "ol_bdc_common_borrowers",
+        "description": (
+            "Borrowers common to a GIVEN SET of BDCs -- the cross-portfolio set "
+            "question ('what do ARCC, OBDC and AGTC all lend to?'). Every other "
+            "BDC tool runs borrower -> lenders; this one runs lenders -> shared "
+            "borrowers, so a portfolio-overlap question takes ONE call instead "
+            "of N per-borrower calls. Returns per borrower: borrower, "
+            "borrower_norm, holder_count, holders (the actual BDC tickers, not "
+            "just a count), total_fair_value + total_par_amount in USD, and "
+            "as_of_oldest/as_of_newest. Each BDC is read at ITS most recent "
+            "filing and BDCs file on different calendars, so rows MIX filing "
+            "dates -- read as_of_range before treating the marks as "
+            "contemporaneous. Debt positions only (equity stakes are not "
+            "lending relationships). Ordered most-widely-held first. Caps: "
+            "bdc_tickers truncated at 25, limit 50/200, min_holders max 50; a "
+            "min_holders above the number of BDCs supplied is rejected rather "
+            "than returning a misleading empty list. TRUNCATION: the "
+            "`completeness` block in the payload is the runtime truth -- "
+            "complete=true means under-cap, complete=null means exactly-at-cap "
+            "and undecidable (read `more_available_hint`); an out-of-range "
+            "`limit` is CLAMPED server-side, not rejected. Feed a returned "
+            "borrower_norm to ol_bdc_borrower_dispersion for cross-lender "
+            "pricing. Source: SEC 10-K/10-Q schedules of investments. "
+            "[Requires API mode]"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "bdc_tickers": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 25,
+                    "description": "BDC symbols to intersect, e.g. [\"ARCC\",\"OBDC\",\"AGTC\"] (max 25; the excess is truncated server-side)",
+                },
+                "min_holders": {
+                    "type": "number",
+                    "description": "Minimum number of the supplied BDCs that must hold the borrower (default 2, min 2 -- this answers what is SHARED; for one BDC's book use ol_bdc_top_borrowers)",
+                    # minimum 2, not 1 (CLEANCORE vet 2026-08-12; copied
+                    # from the in-tree schema): at 1 a single-ticker call
+                    # became an anonymous portfolio dump. The hosted
+                    # handler floors it too; this keeps the schema honest.
+                    "minimum": 2,
+                    "maximum": 50,
+                },
+                "limit": {
+                    "type": "number",
+                    "description": "Max borrowers to return (default 50, max 200)",
+                    "minimum": 1,
+                    "maximum": 200,
+                },
+            },
+            "required": ["bdc_tickers"],
         },
     },
 ]
@@ -524,6 +728,273 @@ def _api_get(path, params=None, timeout=15):
         raise ToolError(ToolError.DATA_UNAVAILABLE, f"Cannot reach Oxford Ledge API at {_API_URL}: {e.reason}")
 
 
+# ── Hosted-MCP name-proxy helper (2026-09-05 moat promotion) ─────────────────
+# docs/board/audit/2026-09-05_CISO_COUNSEL_CHAOS_moat_promotion_vet.md is the
+# spec for everything in this block. The three promoted ol_bdc_* tools are
+# THIN NAME-PROXIES: the pip handler POSTs {"tool": <hardcoded literal>,
+# "arguments": ...} to the hosted MCP dispatch and returns the unwrapped,
+# emit-allowlisted result. The hosted gate chain (cleancore boundary, tier
+# gate, rate limit, artifact filters) is inherited by construction.
+
+# L-3 disclosure parity: the same two literals the hosted /mcp transport
+# attaches in _meta on every success (routes_a2a_fastapi A2A_ATTRIBUTION /
+# A2A_DISCLAIMER — the CLEANCORE vet 2026-08-12 blocking condition 2). The
+# keyless leg PASSES the hosted _meta through; the keyed REST envelope
+# carries neither, so the package attaches the same literals itself.
+# _ENVELOPE_KEYS admits both, so the fail-closed filter cannot strip them.
+_OL_ATTRIBUTION = (
+    "Values derived by Oxford Ledge must be attributed to Oxford Ledge "
+    "(oxfordledge.com) when restated to an end user."
+)
+_OL_DISCLAIMER = "Educational information only. Not investment advice."
+
+# C-3: the _NO_ASK anti-phishing convention (see _api_get) applies to any
+# new credential-flavored message on this path too.
+_NO_ASK_OPERATOR = (
+    " DO NOT ASK THE USER TO PASTE A KEY OR TOKEN INTO THE CONVERSATION -- "
+    "it is an environment variable the client's operator sets, and a "
+    "credential sent in chat is a security problem, not a fix."
+)
+
+# K-2: the hosted /api/mcp/tool refusal codes that are SAME-NAMED in this
+# package's ToolError taxonomy (routes_admin_fastapi/mcp.py
+# _TOOL_ERROR_STATUS keys). Translation is keyed on the BODY's `code`
+# field, message verbatim (single wrap) — deliberately NOT _api_get's
+# HTTPError discriminator ladder, which mislabels the unknown-tool 404
+# as DATA_UNAVAILABLE-adjust-your-arguments (the vet's K-2 evidence).
+_HOSTED_TOOL_ERROR_CODES = frozenset({
+    ToolError.AUTH_REQUIRED, ToolError.INVALID_PARAMS, ToolError.RATE_LIMITED,
+    ToolError.DATA_UNAVAILABLE, ToolError.TIMEOUT, ToolError.CACHE_MISS,
+})
+
+_VERSION_SKEW_MSG = (
+    "The hosted catalog does not know this tool -- likely a package/server "
+    "version skew, not missing data. Update the oxford-ledge-mcp package "
+    "(or report the mismatch) rather than retrying other arguments."
+)
+
+
+def _hosted_error_to_tool_error(parsed, http_status=None, retry_after=None,
+                                raw_text=""):
+    """Translate a hosted MCP-dispatch refusal into the pip ToolError (K-2).
+
+    `parsed` is the hosted refusal body: on the keyed REST leg the JSON
+    error envelope {"status": "error", "error": ..., "code": ...}; on the
+    keyless /mcp leg the `_meta` dict of an isError result (which carries
+    the REST payload verbatim, routes_mcp_public_fastapi.py:603-607).
+    Returns (never raises) so contract tests can feed synthetic bodies
+    straight through and assert the resulting codes.
+
+    Mapping (vet K-2, verbatim requirements):
+      * body `code` in the shared taxonomy -> SAME-NAMED ToolError with the
+        hosted `error` message verbatim (single wrap -- a hosted
+        DATA_UNAVAILABLE must not be re-wrapped into a second envelope);
+      * unknown-tool 404 body ({"status":"error","error":"Unknown tool: X"},
+        no `code`) -> NOT_FOUND with the version-skew directive, NEVER
+        DATA_UNAVAILABLE;
+      * FastAPI's unrouted {"detail": "Not Found"} -> NOT_FOUND likewise;
+      * codeless 401/402/403 (or the /mcp `authentication_required` /
+        requiredTier _meta shapes) -> AUTH_REQUIRED;
+      * codeless 429 -> RATE_LIMITED, honoring Retry-After;
+      * anything else -> DATA_UNAVAILABLE with the hosted message.
+    The API key is NEVER interpolated into any message here (C-3).
+    """
+    body = parsed if isinstance(parsed, dict) else {}
+    msg = str(body.get("error") or body.get("message") or raw_text or "").strip()
+
+    code = body.get("code")
+    if code in _HOSTED_TOOL_ERROR_CODES:
+        if code == ToolError.RATE_LIMITED:
+            return ToolError(
+                code, msg or "Oxford Ledge rate limit reached for this caller.",
+                retry_after=retry_after)
+        return ToolError(
+            code, msg or f"Hosted MCP dispatch refused this call ({http_status}).")
+
+    # Unknown tool / unrouted path: version skew, never a data condition.
+    if (msg.startswith("Unknown tool")
+            or http_status == 404
+            or body.get("detail") == "Not Found"):
+        return ToolError(ToolError.NOT_FOUND, _VERSION_SKEW_MSG)
+
+    # /mcp anonymous-premium refusal shape or codeless HTTP auth statuses.
+    if (code == "authentication_required" or body.get("requiredTier")
+            or http_status in (401, 402, 403)):
+        return ToolError(
+            ToolError.AUTH_REQUIRED,
+            (msg or "Oxford Ledge rejected the credentials for this call. "
+                    "The client's operator should check OXFORD_LEDGE_API_KEY "
+                    "is set and not revoked.") + _NO_ASK_OPERATOR)
+
+    if http_status == 429:
+        return ToolError(
+            ToolError.RATE_LIMITED,
+            msg or "Oxford Ledge rate limit reached for this caller.",
+            retry_after=retry_after)
+
+    return ToolError(
+        ToolError.DATA_UNAVAILABLE,
+        f"Hosted MCP dispatch failed ({http_status}): {msg[:500]}"
+        if msg else f"Hosted MCP dispatch failed ({http_status}).")
+
+
+def _read_http_error_body(e):
+    """(parsed_json_or_None, raw_text) from an HTTPError — parse-before-
+    truncate (the 3.2.0 vet K-7 lesson: truncating first makes any envelope
+    over the cut unparseable and mislabels the refusal)."""
+    raw = ""
+    try:
+        raw = e.read(65536).decode("utf-8", "replace")
+    except Exception as read_err:
+        # Not silent: an unreadable refusal body downgrades the K-2
+        # translation to status-only mapping, which is worth a trace.
+        _logger.debug("could not read hosted error body: %s", read_err)
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        parsed = None
+    return parsed, raw
+
+
+def _http_retry_after(e):
+    try:
+        return int(e.headers.get("Retry-After") or 0) or None
+    except Exception:
+        return None
+
+
+def _attach_disclosure(result, meta=None):
+    """L-3: attribution + not-investment-advice travel on every success.
+    Hosted /mcp _meta values pass through when present; otherwise the
+    package attaches its own copies of the same literals."""
+    if isinstance(result, dict):
+        m = meta if isinstance(meta, dict) else {}
+        result.setdefault("attribution", m.get("attribution") or _OL_ATTRIBUTION)
+        result.setdefault("disclaimer", m.get("disclaimer") or _OL_DISCLAIMER)
+    return result
+
+
+def _api_tool_call(tool, arguments, timeout=30):
+    """POST one hosted MCP tool call and return the unwrapped result.
+
+    C-1 transport split (the vet's blocking condition, both directions
+    load-bearing):
+      * keyed (OXFORD_LEDGE_API_KEY set) -> POST /api/mcp/tool. The
+        validated-key path bypasses the browser-CSRF Origin check AND is
+        correctly METERED against the key's account. Keyed traffic must
+        NOT move to /mcp — the metering gap there (V4) is still open.
+      * keyless -> POST /mcp as JSON-RPC tools/call, the transport
+        DESIGNED for absent-Origin anonymous agents; it enforces the
+        identical cleancore + tier + rate chain through the shared front.
+    NEVER fabricates an Origin header — a keyless caller that spoofed
+    `Origin: https://www.oxfordledge.com` at /api/mcp/tool would turn the
+    cookie-CSRF gate into decoration (the vet's named forbidden fix).
+
+    C-3: the API key rides ONLY in the `x-api-key` header on the keyed
+    leg — never the URL, never the JSON body, never a log line or error
+    message.
+    """
+    if not _API_URL:
+        raise ToolError(
+            ToolError.API_REQUIRED,
+            "This tool requires a running Oxford Ledge instance. "
+            "Set the OXFORD_LEDGE_URL environment variable "
+            "(e.g. OXFORD_LEDGE_URL=https://www.oxfordledge.com)."
+        )
+    args = arguments if isinstance(arguments, dict) else {}
+    if _API_KEY:
+        return _api_tool_call_keyed(tool, args, timeout)
+    return _api_tool_call_keyless(tool, args, timeout)
+
+
+def _api_tool_call_keyed(tool, arguments, timeout):
+    """Keyed leg: POST /api/mcp/tool (metered, key-authenticated)."""
+    data = json.dumps({"tool": tool, "arguments": arguments}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{_API_URL}/api/mcp/tool",
+        data=data,
+        headers={
+            "User-Agent": "OxfordLedgeMCP/1.0",
+            "Content-Type": "application/json",
+            # C-3: header-only. Never a query string, never the body,
+            # never echoed anywhere below.
+            "x-api-key": _API_KEY,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        parsed, raw = _read_http_error_body(e)
+        raise _hosted_error_to_tool_error(
+            parsed, http_status=e.code, retry_after=_http_retry_after(e),
+            raw_text=raw[:500])
+    except urllib.error.URLError as e:
+        raise ToolError(
+            ToolError.DATA_UNAVAILABLE,
+            f"Cannot reach Oxford Ledge API at {_API_URL}: {e.reason}")
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        raise _hosted_error_to_tool_error(
+            payload if isinstance(payload, dict) else {})
+    # C-5: return the unwrapped `result`, never the hosted envelope.
+    return _attach_disclosure(payload.get("result"))
+
+
+def _api_tool_call_keyless(tool, arguments, timeout):
+    """Keyless leg: POST /mcp tools/call (anonymous-by-design transport)."""
+    data = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": tool, "arguments": arguments},
+    }).encode("utf-8")
+    # No Origin header (absent-Origin is ALLOWED there by design — V1),
+    # and no credential: this leg only runs when no key is configured.
+    req = urllib.request.Request(
+        f"{_API_URL}/mcp",
+        data=data,
+        headers={
+            "User-Agent": "OxfordLedgeMCP/1.0",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        parsed, raw = _read_http_error_body(e)
+        raise _hosted_error_to_tool_error(
+            parsed, http_status=e.code, retry_after=_http_retry_after(e),
+            raw_text=raw[:500])
+    except urllib.error.URLError as e:
+        raise ToolError(
+            ToolError.DATA_UNAVAILABLE,
+            f"Cannot reach Oxford Ledge API at {_API_URL}: {e.reason}")
+    if not isinstance(payload, dict):
+        raise ToolError(ToolError.DATA_UNAVAILABLE,
+                        "Malformed /mcp response (not a JSON object).")
+    if payload.get("error"):
+        _err = payload["error"] if isinstance(payload["error"], dict) else {}
+        raise ToolError(
+            ToolError.DATA_UNAVAILABLE,
+            f"/mcp transport error: {_err.get('message') or payload['error']}")
+    res = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    text = ""
+    for c in (res.get("content") or []):
+        if isinstance(c, dict) and c.get("type") == "text":
+            text = c.get("text") or ""
+            break
+    meta = res.get("_meta") if isinstance(res.get("_meta"), dict) else {}
+    if res.get("isError"):
+        # _meta carries the REST refusal payload verbatim (incl. `code`).
+        raise _hosted_error_to_tool_error(meta, raw_text=text)
+    try:
+        result = json.loads(text)
+    except Exception:
+        raise ToolError(ToolError.DATA_UNAVAILABLE,
+                        "Malformed /mcp tool result (non-JSON content).")
+    return _attach_disclosure(result, meta)
+
+
 # ── Standalone tool implementations (work without API) ────────────────────────
 
 def _safe(v, default=None):
@@ -595,7 +1066,13 @@ def tool_get_sec_filings(args):
             filings.append({"title": title, "url": href, "date": updated[:10] if updated else ""})
         return {"ticker": ticker, "filings": filings}
     except Exception as e:
-        return {"ticker": ticker, "filings": [], "error": str(e)}
+        # 2026-09-05 (field-test F8): str(e) surfaced raw XML ParseError text
+        # ("syntax error: line 2, column 61") for a bad ticker -- an envelope
+        # that reads like OUR bug. Match get_fundamentals' clean-miss shape;
+        # the detail stays in the envelope for debugging, labeled as such.
+        return {"ticker": ticker, "filings": [],
+                "error": f"Could not load EDGAR filings for '{ticker}' -- check "
+                         f"the ticker symbol. (upstream: {type(e).__name__})"}
 
 
 @mcp_tool(name="get_insider_trades", cache=FUNDAMENTAL)
@@ -696,6 +1173,30 @@ def tool_get_fundamentals(args):
                 return (t - s).days
             except ValueError:
                 return -1
+
+        # G1 (2026-09-04, in-tree F4 doctrine in miniature): the
+        # Including... equity rung is parent + NCI. For a filer that
+        # tags ANY non-controlling-interest concept, letting it fill
+        # parent-missing years seats a CONSOLIDATED figure under a
+        # parent-attributable label (the +281% class the in-tree
+        # extractor evicted). Name-matched, with the two families the
+        # in-tree predicate excludes (consolidated totals themselves +
+        # the two pretax ordering-only lines). A no-NCI filer (the
+        # AAON class) keeps the rung -- for them it is arithmetically
+        # the parent figure. False positive costs an honest blank;
+        # false negative is the defect. When in doubt, match.
+        _NCI_EXCL = (
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxes"
+            "ExtraordinaryItemsNoncontrollingInterest",
+            "IncomeLossFromContinuingOperationsBeforeIncomeTaxes"
+            "MinorityInterestAndIncomeLossFromEquityMethodInvestments",
+        )
+        _has_nci = any(
+            ("Noncontrolling" in c or "MinorityInterest" in c)
+            and c not in _NCI_EXCL and "IncludingPortion" not in c
+            for c in us_gaap)
+        if _has_nci:
+            line_items["StockholdersEquity"] = ["StockholdersEquity"]
 
         result = {"ticker": ticker, "data": {}}
         for label, concepts in line_items.items():
@@ -879,7 +1380,7 @@ _FRED_GOV_PREFIXES = (
     "DGS", "DFF", "FEDFUNDS", "SOFR", "GDP", "CPIAUCSL", "CPILFESL", "PCEPI", "UNRATE",
     "PAYEMS", "T10Y", "T5Y", "DTB", "TB3MS", "DFEDTAR", "DEXUS", "DEXJP", "DEXCH",
     "M1SL", "M2SL", "HOUST", "RSAFS", "INDPRO", "PPIACO", "MICH", "RRPONTSYD", "WALCL")
-_fred_thirdparty_cache: dict[str, bool] = {}
+_fred_thirdparty_cache: dict[str, str] = {}
 
 
 def _scrub_fred_key(text: str) -> str:
@@ -889,9 +1390,15 @@ def _scrub_fred_key(text: str) -> str:
     return re.sub(r"api_key=[^&\s'\"]+", "api_key=REDACTED", text)
 
 
-def _fred_series_is_thirdparty(series: str, key: str) -> bool:
-    """Fail-closed: True if the FRED series is (or cannot be confirmed NOT to be)
-    third-party copyright. Only authoritative FRED-metadata verdicts are cached."""
+def _fred_series_is_thirdparty(series: str, key: str) -> str:
+    """Fail-closed verdict: "thirdparty" (confirmed copyright), "unknown"
+    (FRED's own metadata endpoint authoritatively says no such series --
+    an id typo, NOT a licensing case), "unverifiable" (probe down; only
+    known-gov prefixes serve), or "" (clear to serve). Only authoritative
+    FRED-metadata verdicts are cached. 2026-09-05 (field-test F8): a typo'd
+    id used to receive the third-party licensing refusal -- confusing and
+    wrong; the split never weakens fail-closed (unknown requires FRED
+    itself confirming nonexistence)."""
     s = (series or "").upper()
     if s in _fred_thirdparty_cache:
         return _fred_thirdparty_cache[s]
@@ -906,14 +1413,14 @@ def _fred_series_is_thirdparty(series: str, key: str) -> bool:
         # Authoritative FRED answer -> cache it.
         if rows:
             meta = (rows[0].get("notes") or "") + " " + (rows[0].get("title") or "")
-            verdict = bool(_FRED_THIRDPARTY_NOTE.search(meta))
+            verdict = "thirdparty" if _FRED_THIRDPARTY_NOTE.search(meta) else ""
         else:
-            verdict = True  # unknown/invalid series id -> refuse
+            verdict = "unknown"  # FRED itself says the series does not exist
         _fred_thirdparty_cache[s] = verdict
         return verdict
     # Probe unavailable: FAIL CLOSED. Serve ONLY a known U.S.-gov series; refuse the
     # rest. Do NOT cache (so a recovered probe re-decides authoritatively next time).
-    return not s.startswith(_FRED_GOV_PREFIXES)
+    return "" if s.startswith(_FRED_GOV_PREFIXES) else "unverifiable"
 
 
 @mcp_tool(name="get_fred_data", cache=FUNDAMENTAL)
@@ -923,7 +1430,22 @@ def tool_get_fred_data(args):
     if not fred_key:
         raise ToolError(ToolError.API_REQUIRED, "Set FRED_API_KEY environment variable for FRED data")
     series = args["series"].strip().upper()
-    if _fred_series_is_thirdparty(series, fred_key):
+    _verdict = _fred_series_is_thirdparty(series, fred_key)
+    if _verdict == "unknown":
+        raise ToolError(
+            ToolError.INVALID_PARAMS,
+            f"No FRED series with id '{series}' exists (FRED metadata lookup "
+            f"returned no match). Check the series id -- this is an id problem, "
+            f"not a licensing refusal.")
+    if _verdict == "unverifiable":
+        raise ToolError(
+            ToolError.INVALID_PARAMS,
+            f"FRED series '{series}' could not be verified against FRED metadata "
+            f"(probe unavailable) and is not a known U.S.-government series. This "
+            f"package fails closed on licensing: only confirmed public-domain "
+            f"series serve. Retry later, or use a known gov series (DGS10, "
+            f"CPIAUCSL, UNRATE, ...).")
+    if _verdict:
         raise ToolError(
             ToolError.INVALID_PARAMS,
             f"FRED series '{series}' carries third-party (non-U.S.-government) copyright "
@@ -987,6 +1509,69 @@ def tool_get_bdc_list(args):
     return _api_get("/api/bdc/list")
 
 
+@mcp_tool(name="get_bdc_borrower_mark_history", cache=FUNDAMENTAL)
+def tool_get_bdc_borrower_mark_history(args):
+    # 2026-09-05 external field-test F4: the borrower panel's priceHistory
+    # was 8 tranches of ONE quarter. This proxies the purpose-built
+    # multi-quarter route. New tools register an emit allowlist rather
+    # than ship bare (fail-closed redistribution boundary).
+    params = {"q": args["borrower_norm"]}
+    if args.get("quarters") is not None:
+        params["quarters"] = int(args["quarters"])
+    return filter_to_allowlist(
+        "get_bdc_borrower_mark_history",
+        _api_get("/api/bdc/borrower-mark-history", params))
+
+
+@mcp_tool(name="get_bdc_holdings", cache=FUNDAMENTAL)
+def tool_get_bdc_holdings(args):
+    # 2026-09-05 external field test: the package could find a borrower
+    # (search_bdc_borrower) and list BDCs (get_bdc_list) but had no
+    # entity->portfolio read. Proxies the existing /api/bdc/holdings
+    # route (its only parameter is `ticker`).
+    ticker = normalize_ticker(args.get("ticker"))
+    return filter_to_allowlist(
+        "get_bdc_holdings", _api_get("/api/bdc/holdings", {"ticker": ticker}))
+
+
+# ── 2026-09-05 moat promotion: three BDC name-proxies ────────────────────────
+# Promoted IN_TREE_ONLY -> SHARED per the CISO+COUNSEL+CHAOS vet
+# (docs/board/audit/2026-09-05_CISO_COUNSEL_CHAOS_moat_promotion_vet.md)
+# + OWNER ratification. Each handler passes its tool name as a HARDCODED
+# STRING LITERAL (K-1: tool-identity integrity — no caller-influenced value
+# may reach the dispatched "tool" field; a caller-supplied "tool" key inside
+# `arguments` lands harmlessly inside arguments, the hosted route reads only
+# the top-level field), and every result rides the fail-closed emit
+# allowlist (L-2: "the bridge must ride this filter, or bridging widens
+# leakage" — the module's own design note). heavy=True mirrors the in-tree
+# registrations for dispersion/top_borrowers (#75 abuse control); all three
+# are FREE (deliberately-not-tiered, OWNER-reverted plus-gate precedent at
+# moat_reads.py:295-299).
+
+@mcp_tool(name="ol_bdc_top_borrowers", cache=FUNDAMENTAL, heavy=True)
+def tool_ol_bdc_top_borrowers(args):
+    """Name-proxy to the hosted ol_bdc_top_borrowers (FREE, SEC-EDGAR SOI)."""
+    return filter_to_allowlist(
+        "ol_bdc_top_borrowers",
+        _api_tool_call("ol_bdc_top_borrowers", args))
+
+
+@mcp_tool(name="ol_bdc_borrower_dispersion", cache=FUNDAMENTAL, heavy=True)
+def tool_ol_bdc_borrower_dispersion(args):
+    """Name-proxy to the hosted ol_bdc_borrower_dispersion (FREE, SEC-EDGAR SOI)."""
+    return filter_to_allowlist(
+        "ol_bdc_borrower_dispersion",
+        _api_tool_call("ol_bdc_borrower_dispersion", args))
+
+
+@mcp_tool(name="ol_bdc_common_borrowers", cache=FUNDAMENTAL)
+def tool_ol_bdc_common_borrowers(args):
+    """Name-proxy to the hosted ol_bdc_common_borrowers (FREE, SEC-EDGAR SOI)."""
+    return filter_to_allowlist(
+        "ol_bdc_common_borrowers",
+        _api_tool_call("ol_bdc_common_borrowers", args))
+
+
 # min_tier="plus": canonical premium analytics (see get_options_chain
 # note above). Mirrors mcp_server.py; sf_monetization_v3-compliant.
 @mcp_tool(name="get_debt_maturities", cache=FUNDAMENTAL, heavy=True, min_tier="plus")
@@ -1003,9 +1588,13 @@ def tool_get_capital_allocation(args):
     return _api_get("/api/capital-structure", {"ticker": ticker})
 
 
-# min_tier="plus": canonical premium analytics (see get_options_chain
-# note above). Mirrors mcp_server.py; sf_monetization_v3-compliant.
-@mcp_tool(name="get_13f_holdings", cache=FUNDAMENTAL, heavy=True, min_tier="plus")
+# NO min_tier (OWNER ruling 2026-09-05, external field-test F9): the whole
+# 13F product surface is free -- /api/fund-holdings and its timeseries
+# sibling carry no require_min_tier, and the SSR/SPA 13F views are public.
+# The prior min_tier="plus" here was a FALSE PAYWALL: the package refused
+# calls the server would happily serve. Parity is now pinned by
+# tests/test_mcp_package_tier_parity_contract.py in the main repo.
+@mcp_tool(name="get_13f_holdings", cache=FUNDAMENTAL, heavy=True)
 def tool_get_13f_holdings(args):
     fund = args["fund"].strip()
     # 2026-08-10 field test #2: the route signature is cik-only
@@ -1241,7 +1830,7 @@ def main():
     if _API_URL:
         _log(f"  API endpoint: {_API_URL}")
     else:
-        _log("  Tip: Set OXFORD_LEDGE_URL for all 13 tools. Standalone mode serves only the keyless public-API tools (2 SEC EDGAR; FRED with FRED_API_KEY).")
+        _log("  Tip: Set OXFORD_LEDGE_URL for all 18 tools. Standalone mode serves only the keyless public-API tools (2 SEC EDGAR; FRED with FRED_API_KEY).")
 
     # Try to use the mcp package if available
     try:
@@ -1252,7 +1841,14 @@ def main():
 
         _log("Using mcp package for protocol handling")
 
-        server = Server("oxford-ledge-mcp")
+        # 2026-09-05 (field-test F2): a stale install (3.1.1 vs PyPI 3.2.0)
+        # tested silently for a full session. The handshake now carries the
+        # version so client UIs display it; older mcp libs without the kwarg
+        # fall back to the name-only form.
+        try:
+            server = Server("oxford-ledge-mcp", version=__version__)
+        except TypeError:
+            server = Server("oxford-ledge-mcp")
 
         @server.list_tools()
         async def list_tools():

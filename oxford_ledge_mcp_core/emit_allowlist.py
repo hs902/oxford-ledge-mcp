@@ -89,6 +89,103 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         "changes", "new_positions", "increased", "decreased", "closed",
         "prevshares", "shareschange", "pctchange",
     }),
+    # 2026-09-05 (external field-test F4 remainder): seeded from the
+    # producing route's emitted keys (/api/bdc/borrower-mark-history --
+    # itself a projection of pg_get_borrower_mark_history's SELECT
+    # aliases). SEC-EDGAR-derived Schedule-of-Investments data, public
+    # domain; no vendor fields exist in this set.
+    "get_bdc_borrower_mark_history": frozenset({
+        "borrowernorm", "quarters", "units", "note",
+        # per-quarter series entry (the units sub-dict labels these same
+        # three mark fields, so its keys are already admitted)
+        "quarterkey", "minmark", "maxmark", "parweightedmark",
+        "rowcount", "holdercount", "bdcs", "periodend",
+    }),
+    # 2026-09-05 (same field test): seeded from data/bdc_query.query_by_bdc's
+    # response dict + the route's F9 freshness additions. All SEC-EDGAR
+    # 10-Q/10-K SOI-derived. DELIBERATELY ABSENT: `byLienPosition` -- its
+    # keys are DATA VALUES (lien-name buckets), which the fail-closed
+    # key filter would reduce to an empty husk; per-row lienPosition
+    # ships instead, so the breakdown is recomputable client-side.
+    "get_bdc_holdings": frozenset({
+        # envelope
+        "bdcticker", "bdcname", "filingdate", "filingtype", "periodend",
+        "totalholdings", "totalparamount", "totalfairvalue",
+        "weightedavgprice", "topindustries", "portfoliostructure",
+        "holdings", "datasource", "fetchedat", "retired", "successorticker",
+        # holdings rows (query_by_bdc's clean_holdings projection)
+        "borrowername", "industry", "securitytype", "lienposition",
+        "interestrate", "maturitydate", "paramount", "costamount",
+        "fairvalue", "markedprice",
+        # portfolioStructure metrics (S21-F risk framing)
+        "floatingratepct", "floatingrateofdebtpct", "legacyliborpct",
+        "legacyliborofdebtpct", "seniorsecuredpct",
+        "seniorsecuredofdebtpct", "equitypct", "pikcount",
+        "pikpctofholdings",
+    }),
+    # 2026-09-05 moat-promotion vet L-2 (docs/board/audit/
+    # 2026-09-05_CISO_COUNSEL_CHAOS_moat_promotion_vet.md): the three
+    # name-proxied ol_bdc_* tools MUST register here and ride the filter --
+    # hosted-side filtering is CONTENT hygiene (nonborrower/industry-label
+    # artifacts), not a redistribution boundary; the pip boundary must not
+    # depend on the server never adding a licensed field later. All three
+    # seeded from the COMPOSED hosted emit builders (mcp_tools/moat_reads.py
+    # -- the dispersion envelope + lender rows, the top-borrowers envelope +
+    # rows + industry_basis, the common-borrowers envelope + rows), including
+    # every nested sub-tree: _as_of block keys, _completeness block keys,
+    # holders {ticker,name} entries, industry_basis sub-keys (verified
+    # scalar-valued: by_fair_value is an industry LABEL string per
+    # pg_get_borrower_industry_vote, never a data-keyed dict). All data is
+    # the OL first-party parse of SEC EDGAR 10-K/10-Q Schedules of
+    # Investments (public domain); no vendor field exists in any of these
+    # emits (vet L-1, checked builder-by-builder). summary/count/as_of/
+    # attribution/disclaimer ride _ENVELOPE_KEYS.
+    "ol_bdc_borrower_dispersion": frozenset({
+        # envelope (moat_reads.py dispersion return dict)
+        "borrower_norm", "completeness", "spread_unit", "fair_value_unit",
+        "marked_price_unit", "filing_date_range", "lenders",
+        # lender rows
+        "bdc_ticker", "filing_date", "security_type", "lien_position",
+        "spread", "spread_bps", "marked_price", "fair_value",
+        "bdc_latest_filing", "is_stale_vs_bdc_latest", "bdc_name",
+        # _as_of block
+        "filing_dates", "mixes_filings", "stale_rows", "scope", "note",
+        # _completeness block
+        "returned", "limit", "total_available", "complete",
+        "completeness_basis", "more_available_hint",
+    }),
+    "ol_bdc_top_borrowers": frozenset({
+        # envelope
+        "completeness", "units", "holder_count_basis", "fair_value_basis",
+        "borrowers",
+        # borrower rows
+        "borrower", "borrower_norm", "holder_count",
+        "cross_holder_sum_fair_value", "total_fair_value", "industry",
+        "holder_tickers", "holders", "name", "holder_count_matches_tickers",
+        # industry_basis sub-tree (#32 vote disclosure; values are scalar
+        # industry labels, safe for the recursive KEY filter)
+        "industry_basis", "stored_label_chosen_by", "by_fair_value",
+        "fair_value_agreement", "distinct_industries", "contested",
+        # _as_of block
+        "filing_dates", "mixes_filings", "stale_rows", "scope", "note",
+        # _completeness block
+        "returned", "limit", "total_available", "complete",
+        "completeness_basis", "more_available_hint",
+    }),
+    "ol_bdc_common_borrowers": frozenset({
+        # envelope
+        "bdc_tickers", "min_holders", "completeness", "units",
+        "fair_value_basis", "as_of_range", "borrowers",
+        # borrower rows
+        "borrower", "borrower_norm", "holder_count", "holder_tickers",
+        "holders", "name", "total_fair_value", "total_par_amount",
+        "as_of_oldest", "as_of_newest",
+        # _as_of block
+        "filing_dates", "mixes_filings", "stale_rows", "scope", "note",
+        # _completeness block
+        "returned", "limit", "total_available", "complete",
+        "completeness_basis", "more_available_hint",
+    }),
 }
 
 # Import-time invariant: no allowlist may admit a carve-out key. This is

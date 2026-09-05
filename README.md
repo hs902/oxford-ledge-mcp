@@ -117,7 +117,7 @@ If you're an Oxford Ledge contributor working on the parser/dispatcher itself, r
 }
 ```
 
-`OXFORD_LEDGE_USER_TIER` is enforced in dev-mode by the in-tree server (M2 tier-gate, 2026-04-24); set it to `learner` / `analyst` / `plus` / `pro` / `investor_plus` to test tier-restricted tools. Not used in API or standalone modes (those enforce via session cookies / not at all). See [MCP_FOLLOWUPS.md §8.2](../docs/plans/MCP_FOLLOWUPS.md) for the design record.
+`OXFORD_LEDGE_USER_TIER` is enforced in dev-mode by the in-tree server (M2 tier-gate, 2026-04-24); set it to one of the real tier keys — `free`, `plus`, `pro`, `professional`, `institutional_plus`, `team`, or `team-member` (the ranking lives in `oxford_ledge_mcp_core/registry.py::TIER_RANK`) — to test tier-restricted tools. The old display-name spellings `learner` and `analyst` are NOT tiers: `learner` aliases to `free` (denied for gated tools) and `analyst` is deliberately unaliased (denied). Not used in API or standalone modes: API mode authenticates with your `OXFORD_LEDGE_API_KEY` (the hosted remote endpoint is key/Bearer-only — session cookies are deliberately not accepted there); standalone mode has no tiers at all.
 
 After editing config, restart Claude Desktop. You'll see the tools available.
 

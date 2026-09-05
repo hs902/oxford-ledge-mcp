@@ -139,29 +139,96 @@ def mcp_tool(*, name: str, cache: int = MARKET, heavy: bool = False,
     return decorator
 
 
-# Tier ordering for min_tier comparisons. Lower index = cheaper tier.
-# Values align with the HTTP-side `middleware.auth.require_min_tier`
-# acceptance set. Unknown tier strings compare as "insufficient for anything".
-TIER_ORDER = ("learner", "analyst", "plus", "pro", "investor_plus")
+# Tier RANKS for min_tier comparisons. This is a deliberate DUPLICATE of
+# `middleware.auth._TIER_ORDER`: this package is published to PyPI and may
+# not import in-tree Oxford Ledge code (MCP_FOLLOWUPS M1-R1 import
+# boundary), so the two maps are kept in lock-step by a contract instead --
+# tests/test_mcp_tier_ladder_parity_contract.py, the MCP sibling of the
+# FE/BE pin in tests/test_tier_rank_fe_be_drift_contract.py.
+#
+# CORRECTED 2026-08-28. The previous value was
+#     ("learner", "analyst", "plus", "pro", "investor_plus")
+# under a comment claiming it aligned with the HTTP acceptance set. It did
+# not: it shared only `plus` and `pro` with that ladder, three of its five
+# entries are not tiers at all (they are old DISPLAY names -- Learner,
+# Analyst, Investor+AI), and four purchasable tiers were absent. Absent
+# means ValueError means denied, so every min_tier tool rejected
+# professional ($29 Power User), institutional_plus (the top SKU) and team
+# ($99 Advisor) — the three most expensive individual/seat SKUs we sell.
+# That is EXT-AUDIT #46 (2026-07-05) repeating in the one copy of the
+# ladder its contract does not cover.
+#
+# Ties are real and must be preserved, which is why this is a dict and not
+# a tuple: team ranks WITH pro (advisor seat = Investor-equivalent) and
+# team-member ranks WITH free (client seat = Learner-equivalent).
+TIER_RANK = {
+    "free": 0,
+    "team-member": 0,
+    "plus": 1,
+    "pro": 2,
+    "team": 2,
+    "professional": 3,
+    "institutional_plus": 4,
+}
+
+# Deprecated spellings from the 2026-04-24 M2 ladder, kept so an existing
+# claude_desktop_config.json keeps working. The rule for what earns an
+# alias is ONE-DIRECTIONAL: a spelling that PASSED a gate under the old
+# tuple must keep passing (removing it silently revokes access from a
+# working config), but a spelling that was DENIED stays denied -- granting
+# new access is a product decision, not a bug fix.
+#
+# So `investor_plus` is aliased (it passed min_tier="plus" at old index 4)
+# and `learner` is aliased to free (it was denied, and free is denied too,
+# so the alias is behaviour-preserving and merely names it correctly).
+# `analyst` is deliberately NOT aliased: tests/test_mcp_tier_gates.py pins
+# it as insufficient for plus, and although `Analyst` was once the display
+# name for the plus tier, honouring that reading here would hand access to
+# every config carrying the old string. It falls through to unknown, which
+# denies -- exactly what it did before.
+_LEGACY_TIER_ALIASES = {
+    "learner": "free",
+    "investor_plus": "institutional_plus",
+}
+
+# Retained for backward compatibility with anything importing the old name
+# (it is in this package's __all__). Cheapest-first, ties broken
+# arbitrarily; TIER_RANK is authoritative.
+TIER_ORDER = tuple(sorted(TIER_RANK, key=lambda t: TIER_RANK[t]))
+
+
+def _normalize_tier(value: str | None) -> str | None:
+    """Fold a hand-typed tier string to a canonical key, or None.
+
+    Unlike the HTTP side -- where the tier comes from the database -- this
+    value is typed by a human into the `env` dict of
+    claude_desktop_config.json. `"Plus"` and `" plus "` are the same
+    intent as `"plus"`, and denying them produced an error message telling
+    the user to set the very variable they had just set.
+    """
+    if value is None:
+        return None
+    key = value.strip().lower()
+    if not key:
+        return None
+    key = _LEGACY_TIER_ALIASES.get(key, key)
+    return key if key in TIER_RANK else None
 
 
 def tier_sufficient(user_tier: str | None, min_tier: str | None) -> bool:
     """Return True if `user_tier` meets the `min_tier` bar.
 
     If `min_tier is None`, always True (tool is unrestricted).
-    If `user_tier is None` or unknown, False (deny by default).
+    If `user_tier` is None, empty or unrecognised, False -- deny by
+    default. An unrecognised REQUIRED tier is also False: a typo in a
+    decorator must fail closed rather than open a tool to everyone.
     """
     if min_tier is None:
         return True
-    try:
-        min_idx = TIER_ORDER.index(min_tier)
-    except ValueError:
-        # Unknown required tier — treat as "never sufficient" (fails closed)
+    required = _normalize_tier(min_tier)
+    if required is None:
         return False
-    if user_tier is None:
+    held = _normalize_tier(user_tier)
+    if held is None:
         return False
-    try:
-        user_idx = TIER_ORDER.index(user_tier)
-    except ValueError:
-        return False
-    return user_idx >= min_idx
+    return TIER_RANK[held] >= TIER_RANK[required]

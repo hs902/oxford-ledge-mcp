@@ -32,8 +32,27 @@ _TOOL_CACHE: dict[str, tuple[Any, float]] = {}  # key -> (result, expires_at)
 _CACHE_LOCK = threading.Lock()
 
 
+# Args folded to canonical form before keying. EXACTLY the fields every
+# handler already normalizes via normalize_ticker (the repo-wide ticker
+# contract, ratchet-enforced) -- so key identity equals data identity by
+# construction. Deliberately NARROW: folding any case-significant arg
+# (a query string, a note) would serve one casing's cached result for
+# another's, which is a correctness bug traded for a cache hit. The
+# 2026-08-31 MCP audit measured the cost of NOT folding these two as
+# duplicate entries only (handlers normalize internally), so this is
+# efficiency -- but it also means a lowercase retry after an uppercase
+# miss now HITS instead of refetching.
+_CASE_FOLDED_ARGS = ("ticker", "symbol")
+
+
 def cache_key(tool_name: str, args: dict[str, Any]) -> str:
     """Deterministic cache key from tool name + sorted-JSON-encoded args."""
+    if any(isinstance(args.get(k), str) for k in _CASE_FOLDED_ARGS):
+        from .ticker import normalize_ticker
+        args = dict(args)
+        for k in _CASE_FOLDED_ARGS:
+            if isinstance(args.get(k), str):
+                args[k] = normalize_ticker(args[k])
     args_str = json.dumps(args, sort_keys=True, default=str)
     h = hashlib.md5((tool_name + args_str).encode()).hexdigest()[:16]
     return f"{tool_name}:{h}"

@@ -74,7 +74,9 @@ pip install --upgrade oxford-ledge-mcp
 
 After the upgrade, restart Claude Desktop so it re-spawns the MCP
 subprocess against the new version. Verify with a test prompt:
-*"Using Oxford Ledge, get the current stock quote for AAPL."*
+*"Using Oxford Ledge, get the SEC fundamentals for AAPL."* (calls
+`get_fundamentals` — a live tool in every current build; the previously
+suggested `get_stock_quote` was removed in 3.0.0).
 
 ## Rolling back
 
@@ -88,20 +90,25 @@ pip install "oxford-ledge-mcp==2.0.2"
 > "oxford-ledge-mcp<2.0"` and claimed "1.x installs stay available on PyPI
 > indefinitely" -- PyPI has NO 1.x release (the earliest published version
 > is 2.0.0), so that rollback failed to resolve. 2.0.2 is the last 2.x.]
+>
+> [CORRECTED AGAIN 2026-09-01: "2.0.2 is the last 2.x" was also wrong --
+> the CHANGELOG records 2.0.3, 2.0.4 (2026-05-27) and 2.1.0 (2026-07-21),
+> all published. To pin the newest 2.x: `pip install "oxford-ledge-mcp<3"`
+> (resolves to 2.1.0).]
 
 Report the issue
-at https://github.com/hs902/OxfordLedge/issues so we can fix it in
-2.0.x.
+at https://github.com/hs902/oxford-ledge-mcp/issues (the package's public
+home, per pyproject `Repository`) so we can fix it.
 
 ## Reporting issues
 
 Include in your bug report:
-1. The tool name that failed (e.g. `get_stock_quote`).
+1. The tool name that failed (e.g. `get_fundamentals`).
 2. The argument dict you passed.
 3. The error message Claude Desktop surfaced.
 4. Whether you're in standalone mode or API mode
    (`OXFORD_LEDGE_URL` set or not).
-5. `pip show oxford-ledge-mcp | grep Version` so we know which 2.x.y.
+5. `pip show oxford-ledge-mcp | grep Version` so we know which release.
 
 ## 2.0.1 — yfinance removed (Y1 sprint, 2026-04-24)
 
@@ -116,8 +123,9 @@ yfinance is a community reverse-engineered client that scrapes
 Yahoo Finance. Yahoo's ToS prohibits unofficial scraping, and the
 endpoint breaks regularly when Yahoo changes internals. Oxford
 Ledge's brand rests on trust + accuracy — we can't depend on a
-ToS-violating upstream. See `docs/plans/YFINANCE_EXCISION.md` for
-the full rationale.
+ToS-violating upstream. The full rationale lives in the Oxford Ledge
+monorepo's yfinance-excision decision record (private; summarized in this
+package's CHANGELOG 2.0.1 entry).
 
 ### What changed
 
@@ -130,7 +138,7 @@ the full rationale.
 
 You have two options:
 
-1. **Pin 1.x**: `pip install "oxford-ledge-mcp<2"` — but note 1.x is unsupported going forward + its yfinance path is fragile.
+1. ~~Pin 1.x~~ **Not possible** — PyPI has no 1.x release (earliest published version is 2.0.0; see the corrected "Rolling back" section above). If you need the old tool set, pin the newest 2.x: `pip install "oxford-ledge-mcp<3"`.
 2. **Set `OXFORD_LEDGE_URL`** — see the main README. This routes your MCP tools through an Oxford Ledge instance that has the proper FMP + SEC EDGAR integrations.
 
 ### CI gate

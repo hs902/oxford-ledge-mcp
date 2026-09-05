@@ -53,6 +53,7 @@ from .registry import (
     _TOOL_TTL,
     _MCP_HEAVY_TOOLS,
     TIER_ORDER,
+    TIER_RANK,
     tier_sufficient,
 )
 from .cache import cache_key, cache_get, cache_set, clear_cache, cache_stats
@@ -76,5 +77,6 @@ __all__ = [
     "clear_cache",
     "cache_stats",
     "TIER_ORDER",
+    "TIER_RANK",
     "tier_sufficient",
 ]

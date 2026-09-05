@@ -5,6 +5,71 @@ All notable changes to `oxford-ledge-mcp` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.3.0 (2026-09-05)
+
+- Three BDC moat tools promoted into the package as thin name-proxies to
+  the hosted MCP dispatch (CISO+COUNSEL+CHAOS publish vet 2026-09-05 +
+  OWNER ratification): `ol_bdc_top_borrowers` (most-widely-syndicated
+  cross-BDC borrowers), `ol_bdc_borrower_dispersion` (cross-lender
+  pricing dispersion for one borrower), `ol_bdc_common_borrowers`
+  (borrowers common to a given SET of BDCs). All three are FREE,
+  SEC-EDGAR Schedule-of-Investments derived (Oxford Ledge first-party
+  parse), and inherit the hosted gate chain by construction. Vet
+  conditions closed in this change: transport split (keyed callers POST
+  the metered `/api/mcp/tool`; keyless callers POST the anonymous-by-
+  design `/mcp` JSON-RPC transport — never a fabricated Origin header);
+  hardcoded tool-name literals per handler (tool-identity integrity);
+  error translation keyed on the hosted body's `code` field (same-named
+  ToolError, hosted message verbatim; an unknown-tool 404 maps to
+  NOT_FOUND version-skew, never a data condition); fail-closed emit
+  allowlists registered for all three, seeded from the hosted emit
+  builders including every nested sub-tree; attribution +
+  not-investment-advice travel on every success (hosted `_meta`
+  passed through on the keyless leg, the same literals attached on the
+  keyed leg); schemas/descriptions copied from the reviewed in-tree
+  literals with every cap declared (`bdc_tickers` max 25, `min_holders`
+  2..50 on common_borrowers, limit maxima 100/100/200), the
+  completeness-block clamp semantics named, and the "<400ms" latency
+  claims dropped (false through the proxy hop); the API key rides only
+  in the `x-api-key` header, never the URL or any error text.
+- `get_corporate_events` advertises the vocabulary the route actually
+  accepts (`earnings/dividend/split/merger/all`, lowercase, now a schema
+  enum): four of the six previously-documented values 400'd, and even
+  "ALL" failed on case. Parity contract-pinned in the main repo
+  (`tests/test_mcp_event_vocab_parity_contract.py`).
+- `get_fred_data` splits its refusals: a typo'd/unknown series id (FRED
+  metadata confirms nonexistence) now says so instead of delivering the
+  third-party-licensing lecture; probe-unavailable keeps the fail-closed
+  licensing refusal with its own wording. The licensing gate is unchanged.
+- `get_sec_filings` no longer surfaces raw parser text ("syntax error:
+  line 2, column 61") for a bad ticker -- clean check-the-ticker envelope
+  with the exception type labeled as upstream detail.
+- The MCP handshake now carries the package version (client UIs display
+  it), so a stale install announces itself -- a 3.1.1 field-tested for a
+  full session while PyPI served 3.2.0.
+
+- New tool `get_bdc_borrower_mark_history`: a REAL multi-quarter mark
+  series for one borrower across every BDC holding its debt -- per-quarter
+  min/max/par-weighted marks (percent of par), tranche and holder counts,
+  contributing BDC tickers (external field-test F4: the borrower panel's
+  `priceHistory` was 8 tranches of ONE quarter, never 8 quarters).
+  SEC-EDGAR Schedule-of-Investments derived; ships through the fail-closed
+  emit allowlist; exact `borrower_norm` match with an honest-empty note.
+- New tool `get_bdc_holdings`: the entity->portfolio read the package
+  lacked -- full latest-filing holdings for one BDC (borrower, lien, rate,
+  maturity, par/cost/fair value, mark) plus portfolio structure metrics,
+  proxying the existing `/api/bdc/holdings` route (`ticker`-only, the
+  route's real signature). Emit-allowlisted; `byLienPosition` is
+  deliberately not emitted (data-keyed dict vs the key filter -- the
+  per-row `lienPosition` carries the same information).
+
+- `get_13f_holdings` no longer declares `min_tier="plus"` (OWNER ruling
+  2026-09-05): the 13F surface is free product-wide -- the backing routes
+  carry no tier gate and the 13F pages are public. The declaration was a
+  false paywall (the package 402-refused calls the server serves freely);
+  found by an external field test, parity now contract-pinned in the main
+  repo (`tests/test_mcp_package_tier_parity_contract.py`).
+
 ## 3.2.0 (2026-08-24)
 
 Publish-vet-driven release (CISO+COUNSEL+CHAOS delta vet + the L-5
