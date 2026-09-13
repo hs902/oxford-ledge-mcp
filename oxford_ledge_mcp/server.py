@@ -1,17 +1,36 @@
 """Oxford Ledge MCP Server — financial data tools for Claude Desktop.
 
-Provides 18 gov-public-data tools for querying SEC filings & fundamentals,
-institutional & insider ownership, BDC/private-credit holdings, and macro
-rates. As of 3.1.0 this is a gov-public-data-only surface (SEC EDGAR / FRED /
-U.S. Treasury) — no commercial-vendor feed, and third-party-copyright fields
-(CUSIPs, agency ratings, third-party FRED series) are excluded.
+Provides 29 tools -- 28 backed by U.S.-government public-data sources
+(SEC EDGAR / FRED / U.S. Treasury / FDIC / USPTO / USAspending / CFTC) plus
+`get_value_investing_fact`, which is Oxford Ledge-authored -- for querying
+SEC filings & fundamentals, institutional & insider ownership,
+BDC/private-credit holdings, and macro rates. As of 3.1.0 there is no
+commercial-vendor feed, and third-party-copyright fields (CUSIPs, agency
+ratings, third-party FRED series) are excluded.
+
+The dispatch seam (`_execute_tool_with_limits`) owns the properties every
+tool shares, so no handler has to remember them (3.4.0 publish vet, wave B3):
+  * bounded arguments outside the published inputSchema `minimum` /
+    `maximum` are REFUSED at the seam with the SDK's sentence (both
+    transports agree; nothing is clamped);
+  * a non-object result from any handler is refused (DATA_UNAVAILABLE) and
+    never cached; a dict carrying an `error` is served, honestly, and never
+    cached; every raised error is uncached by construction;
+  * the emit allowlist is applied for every tool and a tool with no entry is
+    REFUSED at runtime (INTERNAL_ERROR, a packaging defect), not served bare;
+  * the four standalone tools get their `_meta` from meta_table.py; every
+    dict result gets the attribution + not-advice literals last;
+  * both transports (the built-in JSON-RPC loop and the mcp SDK) render one
+    `_dispatch_to_content` result, so isError, the tier tag on tools/list and
+    the malformed-request behaviour cannot diverge; NaN/Infinity never reach
+    the wire.
 
 Two modes:
   1. **API mode** (required for most tools): Set OXFORD_LEDGE_URL to your
-     running Oxford Ledge instance. All 18 tools are available.
+     running Oxford Ledge instance. All 29 tools are available.
   2. **Standalone mode**: no server needed; 4 tools work directly against
      public APIs (2 keyless SEC EDGAR: get_fundamentals/get_sec_filings;
-     2 FRED via FRED_API_KEY: get_yield_curve/get_fred_data). The other 14
+     2 FRED via FRED_API_KEY: get_yield_curve/get_fred_data). The other 25
      tools raise ToolError.API_REQUIRED in this mode and direct the user to
      set OXFORD_LEDGE_URL.
 
@@ -20,9 +39,41 @@ Y1 (2026-04-24): yfinance was removed from this package. Previous
 only the keyless-API tools (see above). See MIGRATING.md for upgrade
 notes.
 
+Where things live (the wheel's `oxford_ledge_mcp/` package; every module below
+ships, and each handler module registers its tools by being imported HERE at
+the source position its block used to occupy, so TOOL_DISPATCH insertion order
+never changes):
+  * server.py (this file) -- configuration (`_API_URL` / `_API_KEY`), the
+    API-mode handlers, the dispatcher (`_execute_tool_with_limits`), the
+    JSON-RPC loop, `main`.
+  * transport.py -- the REST proxy (`_api_get`) and its status ladder, the
+    hosted name-proxy bridge (`_api_tool_call`, keyed + keyless legs), the
+    K-2 error translation and the disclosure literals, cut 2026-09-12; it
+    reads this module's `_API_URL` / `_API_KEY` at call time.
+  * server_tools.py -- the `TOOLS` advertisement (list_tools), cut 2026-09-08.
+  * sec_tools.py -- get_sec_filings + the shared SEC ticker guard / archive
+    URL / ticker->CIK resolver, cut 2026-09-12.
+  * sec_fundamentals.py -- get_fundamentals (SEC XBRL), cut 2026-09-12; its
+    own module because get_insider_trades sits between the two SEC handlers.
+  * fred_tools.py -- get_yield_curve + get_fred_data and the FRED third-party
+    carve-out, cut 2026-09-12.
+  * meta_table.py -- the `_meta` (source / source_url / terms_url / basis)
+    for the four standalone tools, attached at the dispatch seam iff the
+    result carries none (2026-09-12, CV-2); the name-proxied tools get
+    theirs from the host.
+  * wire.py -- the one serializer (NaN/Infinity -> null) and the JSON-RPC /
+    MCP result shapes both transports write, cut 2026-09-12.
+  * oxford_ledge_mcp_core/ -- the registry/decorator, cache, ToolError,
+    emit allowlists, and the policy modules the handlers consume.
+Every name a cut moved is re-exported from this module, so
+`oxford_ledge_mcp.server.<name>` keeps resolving. tools_manifest.py is the
+generated monorepo catalog and is EXCLUDED from the wheel.
+
 Run as stdio MCP server for Claude Desktop:
     oxford-ledge-mcp
 """
+
+from __future__ import annotations
 
 import sys
 import os
@@ -30,8 +81,8 @@ import json
 import traceback
 import threading
 import hashlib
+import re
 import time as _time
-import datetime as _dt
 import urllib.request
 import urllib.parse
 
@@ -43,7 +94,6 @@ if _pkg_parent not in sys.path:
 
 import logging
 import math
-import re
 from typing import Any
 
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
@@ -80,7 +130,7 @@ _mcp_heavy_semaphore = threading.Semaphore(_MCP_HEAVY_MAX_CONCURRENT)
 #
 # Tool registrations are now done via @mcp_tool decorators on each
 # `def tool_X(args):` function, which populate the core's REGISTRY at
-# module-import time. Claude Desktop sees the current 18-tool gov-public
+# module-import time. Claude Desktop sees the current 29-tool gov-public
 # surface; behavior is byte-equivalent per contract.
 
 # CHAOS-3 (2026-08-10 vet): this WAS a local empty shadow ("populated by
@@ -94,12 +144,20 @@ from oxford_ledge_mcp_core import _MCP_HEAVY_TOOLS
 from oxford_ledge_mcp_core.emit_allowlist import (
     EmitAllowlistMissing,
     filter_to_allowlist,
+    TOOL_EMIT_ALLOWLIST,
 )
 
 # Cache lock + dict (module-level for legacy callers; the core's
 # versions are canonical — these aliases point at the same objects).
 from oxford_ledge_mcp import __version__
+from oxford_ledge_mcp_core.fundamentals_policy import ANNUAL_FORMS, fundamentals_refusal, taxonomy_blocks
+from oxford_ledge_mcp_core.split_basis import (
+    apply_basis_gate, basis_gate_report, filed_values_by_year)
+from oxford_ledge_mcp_core.holders_vintage import holders_disclosure, row_vintage
+from oxford_ledge_mcp_core.errors import non_object_response
+from oxford_ledge_mcp_core.errors import json_type_name, non_object_tool_error
 from oxford_ledge_mcp_core.cache import _TOOL_CACHE, _CACHE_LOCK
+from oxford_ledge_mcp.meta_table import standalone_meta
 from oxford_ledge_mcp_core import (
     mcp_tool,
     MARKET,
@@ -176,7 +234,7 @@ def _strip_carveout_ids(obj: Any) -> Any:
 #
 # NOTE 2026-07-09 (#93 consolidation): tools_manifest.py is now GENERATED
 # from the root mcp_tool_definitions.py via tools/gen_mcp_tools_manifest.py
-# — do NOT hand-mirror edits from here into it anymore. THIS list is
+# — do NOT hand-mirror edits from here into it anymore. The pip list (now in server_tools.py) is
 # different in kind: it advertises the proxy handlers this pip package
 # actually ships, a SUBSET of the monolith's dispatch, and several
 # entries still carry pre-rename tool names (get_stock_quote vs
@@ -195,804 +253,103 @@ def _strip_carveout_ids(obj: Any) -> Any:
 # name-proxy bridge -- _api_tool_call below -- per the moat-promotion vet;
 # the pre-existing REST-route handlers are unchanged.)
 
-TOOLS = [
-    # ── Core company data (API-mode via OXFORD_LEDGE_URL; Y1 2026-04-24) ──
-    {
-        "name": "get_holders",
-        "description": "Get top 10 institutional shareholders for a stock with share counts and values.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol"}
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
-        "name": "get_sec_filings",
-        "description": (
-            "Get recent SEC EDGAR filings (10-K, 10-Q, 8-K, DEF 14A) for a "
-            "company with filing dates and direct links."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol"},
-                "filing_type": {"type": "string", "description": "Filing type filter (10-K, 10-Q, 8-K, etc). Optional."},
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
-        "name": "get_insider_trades",
-        "description": "Get recent insider buy/sell transactions for a company from Form 4 filings.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol"}
-            },
-            "required": ["ticker"],
-        },
-    },
-    # ── SEC EDGAR tools (standalone via direct API) ──
-    {
-        "name": "get_fundamentals",
-        "description": (
-            "Get XBRL-parsed financial statements from SEC EDGAR for a ticker. "
-            "Returns up to 10 years of revenue, net income, EPS, operating cash "
-            "flow, total assets, total debt, and other key line items."
-            " NOTE: for investment companies (BDCs, closed-end funds), OperatingCashFlow"
-            " is routinely NEGATIVE because portfolio purchases run through operating"
-            " activities under ASC 946 -- it is not a distress signal there."),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL)"}
-            },
-            "required": ["ticker"],
-        },
-    },
-    # ── Bond / credit tools (standalone via FINRA TRACE) ──
-    # ── Macro / economic tools (standalone via FRED) ──
-    {
-        "name": "get_yield_curve",
-        "description": (
-            "Get the current Treasury yield curve (1M through 30Y) from FRED "
-            "with optional historical comparison."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "include_history": {"type": "boolean", "description": "Include yield curve from 1 year ago for comparison (default false)"}
-            },
-        },
-    },
-    {
-        "name": "get_fred_data",
-        "description": (
-            "Get economic data from FRED (Federal Reserve Economic Data). "
-            "Supports any FRED series ID (e.g. GDP, UNRATE, CPIAUCSL, DFF, "
-            "T10Y2Y, FEDFUNDS)."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "series": {"type": "string", "description": "FRED series ID (e.g. GDP, UNRATE, CPIAUCSL, DFF)"},
-                "days": {"type": "integer", "description": "Number of days of history (default 365)"},
-            },
-            "required": ["series"],
-        },
-    },
-    # ── Short interest (API-mode via OXFORD_LEDGE_URL; Y1 2026-04-24) ──
-    # ── API-mode tools (require OXFORD_LEDGE_URL) ──
-    {
-        "name": "get_corporate_events",
-        "description": (
-            "Get corporate events for a ticker from SEC filings and announcements "
-            "(8-K item index, earnings dates, dividends, splits, mergers). "
-            "[Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL)"},
-                # 2026-09-05 (field-test F8, Pattern-T CONFIRMED): the prior
-                # advertised vocabulary (acquisition/divestiture/executive_change/
-                # restructuring/ALL) matched NOTHING the route accepts -- four of
-                # six documented values 400'd, and even "ALL" failed (the route
-                # is lowercase-only). This enum IS the route's _VALID_EVENT_TYPES;
-                # parity contract-pinned in the main repo.
-                "event_type": {"type": "string",
-                               "enum": ["earnings", "dividend", "split", "merger", "all"],
-                               "description": "Optional filter (lowercase): earnings, dividend, split, merger, or all"},
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
-        "name": "search_bdc_borrower",
-        "description": (
-            "Search BDC (Business Development Company) portfolio holdings by "
-            "borrower name. Returns which BDCs hold the company, fair values, "
-            "par amounts, and investment types. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Borrower/company name to search (e.g. Finastra, Medline)"}
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "get_bdc_list",
-        "description": (
-            "List all BDC tickers tracked by Oxford Ledge with their names, AUM "
-            "(total fair value), holding counts, and latest filing dates. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-        },
-    },
-    {
-        "name": "get_bdc_borrower_mark_history",
-        "description": (
-            "Multi-quarter fair-value mark history for one borrower across every "
-            "BDC that holds its debt: per-quarter min/max and par-weighted "
-            "average marks (percent of par, 2dp), tranche and holder counts, and "
-            "the contributing BDC tickers. Derived from SEC EDGAR "
-            "Schedule-of-Investments filings (public domain). Exact "
-            "borrower_norm match only -- resolve the key with "
-            "search_bdc_borrower first; an unknown key returns an empty series "
-            "with a note, not an error. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "borrower_norm": {"type": "string", "description": "Normalized borrower key, matched EXACTLY (take borrowerNorm from a search_bdc_borrower result)"},
-                "quarters": {"type": "integer", "minimum": 1, "maximum": 16, "default": 8, "description": "Most-recent quarters to return (1-16, default 8)"},
-            },
-            "required": ["borrower_norm"],
-        },
-    },
-    {
-        "name": "get_bdc_holdings",
-        "description": (
-            "Full portfolio holdings for one BDC's latest SEC filing: borrower, "
-            "industry, security type, lien position, rate, maturity, par/cost/"
-            "fair value and mark per position, plus portfolio-level totals and "
-            "structure metrics (floating-rate %, senior-secured %, equity %, "
-            "PIK count). Derived from SEC EDGAR Schedule-of-Investments filings "
-            "(10-Q/10-K, public domain). [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "BDC ticker symbol (e.g. ARCC, OBDC — see get_bdc_list)"},
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
-        "name": "get_debt_maturities",
-        "description": (
-            "Get the debt maturity schedule from SEC EDGAR 10-K footnotes. "
-            "Returns year-by-year maturity amounts in millions and a confidence "
-            "level (high/medium/low/none). [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL)"}
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
-        "name": "get_capital_allocation",
-        "description": (
-            "Get 10-year capital allocation scorecard from SEC EDGAR XBRL: "
-            "buybacks, dividends, debt issuance/repayment, acquisitions, "
-            "stock compensation, and shares outstanding history. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL)"}
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
-        "name": "get_13f_holdings",
-        "description": (
-            "Get top institutional holdings from a fund's latest SEC 13F filing. "
-            "Accepts a fund CIK number ONLY (not a ticker). Returns fund name, "
-            "filing date, top holdings with share counts and market values. "
-            "[Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "fund": {"type": "string", "description": "Fund CIK number (e.g. 1067983 for Berkshire Hathaway). CIK only — the API does not resolve fund tickers."},
-                "max_holdings": {"type": "number", "description": "Maximum number of holdings to return (default 50)"},
-            },
-            "required": ["fund"],
-        },
-    },
-    {
-        "name": "get_value_investing_fact",
-        "description": (
-            "Get a value investing quote, principle, or historical fact. Includes "
-            "quotes from Buffett, Graham, Munger, Klarman, and other value "
-            "investing legends with full citations. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "category": {"type": "string", "description": "Optional category, matched case-insensitively. The vocabulary is EXACTLY: principle, historical_fact, psychology, quote, case_study, contrarian, mistake. An unknown value returns a no-data error -- retry with one of the listed values. CORRECTED 2026-08-11 -- six of the seven previously documented here never existed."},
-            },
-        },
-    },
-    # ── 2026-09-05 moat promotion (docs/board/audit/
-    # 2026-09-05_CISO_COUNSEL_CHAOS_moat_promotion_vet.md, OWNER-ratified):
-    # three BDC moat tools promoted from IN_TREE_ONLY as thin name-proxies
-    # to the hosted MCP dispatch. Descriptions/schemas are COPIED from the
-    # reviewed in-tree literals (mcp_tool_definitions.py -- vet L-4:
-    # "the reviewed text is the asset, re-authoring is the risk"), adjusted
-    # ONLY for transport facts: the "<400ms typical" latency claims are
-    # dropped (false through an HTTP proxy hop), and each description names
-    # the completeness-block semantics (vet K-6) since the hosted caps
-    # CLAMP rather than reject.
-    {
-        "name": "ol_bdc_top_borrowers",
-        "description": (
-            "MOAT / BDC discovery: the private-credit borrowers syndicated "
-            "across the MOST BDCs, ranked by lender count then exposure -- the "
-            "entrypoint for the BDC/private-credit category no generic MCP "
-            "touches. Pairs with `ol_bdc_borrower_dispersion` (feed a returned "
-            "`borrower_norm` into it to see cross-lender pricing). Returns "
-            "{summary, count, borrowers}; each row is {borrower (display name), "
-            "borrower_norm (the key other ol_bdc_* tools take), holder_count "
-            "(distinct BDC lenders), total_fair_value (whole USD across "
-            "lenders, latest filings; null when unpriced), industry}. Caps: "
-            "limit default 25 / hard 100; min_holders default 2 (max 50). "
-            "Parser mis-ingests (subtotals, maturity-date and instrument-"
-            "descriptor rows) are filtered out, so the returned count is clean "
-            "borrowers only. TRUNCATION: the `completeness` block in the "
-            "payload is the runtime truth -- complete=true means under-cap "
-            "(this IS everything), complete=false means a known total exceeds "
-            "the page, complete=null means exactly-at-cap and genuinely "
-            "undecidable (read `more_available_hint`). An out-of-range `limit` "
-            "is CLAMPED to the cap server-side, not rejected, so the schema "
-            "maximum is documentation and `completeness` is the check. Source: "
-            "SEC EDGAR BDC schedules of investments (Oxford Ledge parse); "
-            "FREE. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "min_holders": {
-                    "type": "integer",
-                    "description": "Minimum number of BDC lenders a borrower must appear in (default 2).",
-                    "maximum": 50,
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Max borrowers to return (default 25, hard cap 100).",
-                    "maximum": 100,
-                },
-            },
-        },
-    },
-    {
-        "name": "ol_bdc_borrower_dispersion",
-        "description": (
-            "MOAT: cross-lender loan-pricing DISPERSION for one private-credit "
-            "borrower -- how N different BDCs each price the SAME loan (spread / "
-            "mark / fair value). The credit-mispricing signal no generic MCP "
-            "has: when one BDC marks a borrower S+550 @ 98 and another S+575 @ "
-            "99, the lenders disagree on the credit. Pass the borrower's "
-            "canonical `borrower_norm` key (from `ol_bdc_top_borrowers` or "
-            "`search_bdc_borrower`). Returns {summary, borrower_norm, count, "
-            "lenders}, ordered widest-spread-first; each lender row is "
-            "{bdc_ticker, filing_date, security_type, lien_position, spread, "
-            "marked_price, fair_value}. UNITS TRAP: `spread` is the RAW AS-FILED "
-            "number and is MIXED-UNIT across filers -- one BDC files 5.75 "
-            "(percent) for what another files as 575 (bps). Ranking is done on a "
-            "normalised basis internally, but the emitted `spread` is not "
-            "normalised, so read each value against its own filer and do NOT "
-            "average or diff them blind. marked_price is out of 100; fair_value "
-            "is whole USD. Debt tranches only (equity excluded). Rows are each "
-            "BDC's most recent filing THAT HOLDS this borrower, so vintages can "
-            "differ across lenders and a wound-down lender's frozen final filing "
-            "can still appear. Default 25 rows, hard cap 100. Honest-empty when "
-            "only one BDC holds the name. TRUNCATION: the `completeness` block "
-            "in the payload is the runtime truth -- complete=true means "
-            "under-cap, complete=null means exactly-at-cap and undecidable "
-            "(read `more_available_hint`); an out-of-range `limit` is CLAMPED "
-            "server-side, not rejected. Source: SEC EDGAR BDC schedules of "
-            "investments (Oxford Ledge parse); FREE. [Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "borrower_norm": {
-                    "type": "string",
-                    "description": "Canonical normalized borrower key (from ol_bdc_top_borrowers or borrower search).",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Max lender positions to return (default 25, hard cap 100).",
-                    "maximum": 100,
-                },
-            },
-            "required": ["borrower_norm"],
-        },
-    },
-    {
-        "name": "ol_bdc_common_borrowers",
-        "description": (
-            "Borrowers common to a GIVEN SET of BDCs -- the cross-portfolio set "
-            "question ('what do ARCC, OBDC and AGTC all lend to?'). Every other "
-            "BDC tool runs borrower -> lenders; this one runs lenders -> shared "
-            "borrowers, so a portfolio-overlap question takes ONE call instead "
-            "of N per-borrower calls. Returns per borrower: borrower, "
-            "borrower_norm, holder_count, holders (the actual BDC tickers, not "
-            "just a count), total_fair_value + total_par_amount in USD, and "
-            "as_of_oldest/as_of_newest. Each BDC is read at ITS most recent "
-            "filing and BDCs file on different calendars, so rows MIX filing "
-            "dates -- read as_of_range before treating the marks as "
-            "contemporaneous. Debt positions only (equity stakes are not "
-            "lending relationships). Ordered most-widely-held first. Caps: "
-            "bdc_tickers truncated at 25, limit 50/200, min_holders max 50; a "
-            "min_holders above the number of BDCs supplied is rejected rather "
-            "than returning a misleading empty list. TRUNCATION: the "
-            "`completeness` block in the payload is the runtime truth -- "
-            "complete=true means under-cap, complete=null means exactly-at-cap "
-            "and undecidable (read `more_available_hint`); an out-of-range "
-            "`limit` is CLAMPED server-side, not rejected. Feed a returned "
-            "borrower_norm to ol_bdc_borrower_dispersion for cross-lender "
-            "pricing. Source: SEC 10-K/10-Q schedules of investments. "
-            "[Requires API mode]"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "bdc_tickers": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "maxItems": 25,
-                    "description": "BDC symbols to intersect, e.g. [\"ARCC\",\"OBDC\",\"AGTC\"] (max 25; the excess is truncated server-side)",
-                },
-                "min_holders": {
-                    "type": "number",
-                    "description": "Minimum number of the supplied BDCs that must hold the borrower (default 2, min 2 -- this answers what is SHARED; for one BDC's book use ol_bdc_top_borrowers)",
-                    # minimum 2, not 1 (CLEANCORE vet 2026-08-12; copied
-                    # from the in-tree schema): at 1 a single-ticker call
-                    # became an anonymous portfolio dump. The hosted
-                    # handler floors it too; this keeps the schema honest.
-                    "minimum": 2,
-                    "maximum": 50,
-                },
-                "limit": {
-                    "type": "number",
-                    "description": "Max borrowers to return (default 50, max 200)",
-                    "minimum": 1,
-                    "maximum": 200,
-                },
-            },
-            "required": ["bdc_tickers"],
-        },
-    },
-]
+# NOTE 2026-09-08 (file-size-budget cut): the TOOLS list itself now lives
+# in oxford_ledge_mcp/server_tools.py -- server.py was AT its 2150-line
+# budget with zero headroom and the manifest was the natural seam. The
+# list moved VERBATIM and is re-exported here, so
+# `from oxford_ledge_mcp.server import TOOLS` is byte-for-byte what it was.
+# The location-bearing contracts (the three AST TOOLS-assignment parsers,
+# the get_corporate_events / get_yield_curve schema windows, the
+# value-investing category scan) were re-pointed in the same commit.
+# Do NOT confuse server_tools.py with the sibling tools_manifest.py: the
+# latter is the generated monorepo catalog and is EXCLUDED from the wheel.
+#
+# NOTE 2026-09-12 (second file-size-budget cut, 3.4.0 publish-vet wave): the
+# file was back at 1,999 of the 2,000-line threshold with six builders queued
+# behind it, so the two standalone tool families left too -- the FRED family
+# to fred_tools.py, get_sec_filings + the shared SEC helpers to sec_tools.py,
+# and get_fundamentals to sec_fundamentals.py (its own module because
+# get_insider_trades sits between the two SEC handlers and a module registers
+# everything on first import). Each is imported below at the EXACT position
+# its block occupied, so TOOL_DISPATCH insertion order is unchanged, and every
+# moved name is re-exported here. The location-bearing pins were re-pointed in
+# the same commit; the class gates that walk "every @mcp_tool handler" now
+# walk all four handler modules. Contract:
+# tests/test_mcp_wheel_tool_family_cut_contract.py.
+
+from oxford_ledge_mcp.server_tools import TOOLS  # noqa: F401  (re-export)
 
 
-# ── API proxy helper ──────────────────────────────────────────────────────────
+def _with_tier_tag(name: str, description: str) -> str:
+    """Prefix a tool description with the tier the dispatcher actually enforces.
 
-def _api_get(path, params=None, timeout=15):
-    """Make a GET request to the Oxford Ledge API."""
-    if not _API_URL:
-        raise ToolError(
-            ToolError.API_REQUIRED,
-            "This tool requires a running Oxford Ledge instance. "
-            "Set the OXFORD_LEDGE_URL environment variable "
-            "(e.g. OXFORD_LEDGE_URL=https://www.oxfordledge.com)."
-        )
-    url = f"{_API_URL}{path}"
-    if params:
-        qs = "&".join(f"{k}={urllib.parse.quote(str(v))}" for k, v in params.items() if v is not None)
-        if qs:
-            url += f"?{qs}"
-    _headers = {"User-Agent": "OxfordLedgeMCP/1.0"}
-    if _API_KEY:
-        # Authenticates + meters the call against the key's account (#120/#121).
-        _headers["x-api-key"] = _API_KEY
-    req = urllib.request.Request(url, headers=_headers)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = ""
-        raw_body = ""
-        try:
-            # 3.2.0 vet K-7: parse-before-truncate. The 404 discriminator
-            # below json-parses this; truncating FIRST made any envelope
-            # over 500 bytes unparseable and mislabelled a data-level 404
-            # as a version mismatch (the exact bug the discriminator
-            # fixed, resurfacing on large bodies). Read bounded (64KB),
-            # parse the full read, truncate only what gets DISPLAYED.
-            raw_body = e.read(65536).decode("utf-8", "replace")
-            body = raw_body[:500]
-        except Exception:
-            pass
-        # MONETIZE-2 (#121): give the AGENT an error it can act on. Every failure
-        # here used to read DATA_UNAVAILABLE — so a 402 (this account's tier does
-        # not include the tool) and a 401 (no/!valid key) both told the model "the
-        # data isn't available", which is false and un-actionable: the model
-        # retried, or told the user the filing didn't exist. Payment and auth are
-        # not data problems.
-        # 2026-08-11: every credential message below names the OPERATOR as the
-        # source and forbids soliciting one in chat. These read as instructions
-        # to the caller, and the caller is a MODEL -- on the hosted twin an
-        # agent hit the sibling of this message and asked its human to paste "an
-        # X-API-Key or an OAuth bearer credential" into the conversation. That
-        # is phishing-shaped even when the error is honest, and it trains users
-        # to put secrets in a chat box. Credentials here are env vars set once
-        # in the client's own config; the end user is never the right source.
-        _NO_ASK = (" DO NOT ASK THE USER TO PASTE A KEY OR TOKEN INTO THE "
-                   "CONVERSATION -- it is an environment variable the client's "
-                   "operator sets, and a credential sent in chat is a security "
-                   "problem, not a fix.")
-        if e.code == 402:
-            raise ToolError(
-                ToolError.AUTH_REQUIRED,
-                "This tool requires a paid Oxford Ledge tier. "
-                + ("Your API key's plan does not include it — see "
-                   "https://www.oxfordledge.com/pricing."
-                   if _API_KEY else
-                   "The client's operator sets OXFORD_LEDGE_API_KEY (keys are "
-                   "created at https://www.oxfordledge.com/account) — without "
-                   "one this client is anonymous and only the free public-data "
-                   "tools work.")
-                + _NO_ASK,
-            )
-        if e.code in (401, 403):
-            raise ToolError(
-                ToolError.AUTH_REQUIRED,
-                "Oxford Ledge rejected the credentials for this tool "
-                f"({e.code}). The client's operator should check "
-                "OXFORD_LEDGE_API_KEY is set and not revoked." + _NO_ASK,
-            )
-        if e.code == 429:
-            retry_after = None
-            try:
-                retry_after = int(e.headers.get("Retry-After") or 0) or None
-            except Exception:
-                pass
-            raise ToolError(
-                ToolError.RATE_LIMITED,
-                "Oxford Ledge rate limit reached for this key.",
-                retry_after=retry_after,
-            )
-        if e.code == 404:
-            # Same reasoning that earned 402 its own code: a 404 on a path is
-            # a client/server version mismatch (developer bug), not "the data
-            # doesn't exist" — never launder it as DATA_UNAVAILABLE.
-            #
-            # 2026-08-11: but the server uses 404 for BOTH. A route answers
-            # 404 through the unified error envelope when a FILTER matched
-            # nothing (the envelope helper REWRITES unmatched messages to a
-            # status-code default, so the agent sees generic no-data text,
-            # not the route's literal -- 3.2.0 vet K-7 corrected the account
-            # here that claimed otherwise), so a
-            # perfectly-routed call with an unknown `category` was reported to
-            # the agent as "this endpoint does not exist" — and the directive
-            # below ("report it rather than retrying") steered it AWAY from the
-            # one correct recovery, which was to try another category. Two
-            # individually-defensible decisions producing a confident lie.
-            #
-            # Discriminate on the BODY, which is unambiguous: our own handlers
-            # emit the unified envelope {error, message, status, request_id}
-            # (the server's shared error-envelope helper), whereas an unrouted path
-            # gets FastAPI's default {"detail": "Not Found"}. A data-level 404
-            # therefore carries `error` + `status`; a routing 404 does not.
-            _envelope = None
-            try:
-                _parsed = json.loads(raw_body)
-                if isinstance(_parsed, dict) and "error" in _parsed \
-                        and "status" in _parsed:
-                    _envelope = _parsed
-            except Exception:
-                _envelope = None
-            if _envelope is not None:
-                # Routed fine; the FILTER matched nothing. Actionable by
-                # changing arguments, so it must not read as a broken build.
-                raise ToolError(
-                    ToolError.DATA_UNAVAILABLE,
-                    f"No data matched this request: "
-                    f"{_envelope.get('message') or _envelope.get('error')} "
-                    f"(the endpoint exists and responded — adjust the "
-                    f"arguments, e.g. a different category/filter value, "
-                    f"rather than reporting a version mismatch).",
-                )
-            raise ToolError(
-                ToolError.NOT_FOUND,
-                f"HTTP 404 for {path} — this endpoint does not exist on the "
-                "server. Likely a package/API version mismatch, not missing "
-                "data; report it rather than retrying other tickers.",
-            )
-        raise ToolError(ToolError.DATA_UNAVAILABLE, f"API returned {e.code}: {body}")
-    except urllib.error.URLError as e:
-        raise ToolError(ToolError.DATA_UNAVAILABLE, f"Cannot reach Oxford Ledge API at {_API_URL}: {e.reason}")
+    `[Tier: free]` -- callable on any authenticated key.
+    `[Tier: plus]` -- 402s below that tier.
 
+    Read from the registry rather than written into the description, so it
+    tracks `@mcp_tool(min_tier=...)` automatically. A tool whose tier changes
+    gets a correct tag with no edit here, and a tag can never claim a gate the
+    dispatcher does not apply.
 
-# ── Hosted-MCP name-proxy helper (2026-09-05 moat promotion) ─────────────────
-# docs/board/audit/2026-09-05_CISO_COUNSEL_CHAOS_moat_promotion_vet.md is the
-# spec for everything in this block. The three promoted ol_bdc_* tools are
-# THIN NAME-PROXIES: the pip handler POSTs {"tool": <hardcoded literal>,
-# "arguments": ...} to the hosted MCP dispatch and returns the unwrapped,
-# emit-allowlisted result. The hosted gate chain (cleancore boundary, tier
-# gate, rate limit, artifact filters) is inherited by construction.
-
-# L-3 disclosure parity: the same two literals the hosted /mcp transport
-# attaches in _meta on every success (routes_a2a_fastapi A2A_ATTRIBUTION /
-# A2A_DISCLAIMER — the CLEANCORE vet 2026-08-12 blocking condition 2). The
-# keyless leg PASSES the hosted _meta through; the keyed REST envelope
-# carries neither, so the package attaches the same literals itself.
-# _ENVELOPE_KEYS admits both, so the fail-closed filter cannot strip them.
-_OL_ATTRIBUTION = (
-    "Values derived by Oxford Ledge must be attributed to Oxford Ledge "
-    "(oxfordledge.com) when restated to an end user."
-)
-_OL_DISCLAIMER = "Educational information only. Not investment advice."
-
-# C-3: the _NO_ASK anti-phishing convention (see _api_get) applies to any
-# new credential-flavored message on this path too.
-_NO_ASK_OPERATOR = (
-    " DO NOT ASK THE USER TO PASTE A KEY OR TOKEN INTO THE CONVERSATION -- "
-    "it is an environment variable the client's operator sets, and a "
-    "credential sent in chat is a security problem, not a fix."
-)
-
-# K-2: the hosted /api/mcp/tool refusal codes that are SAME-NAMED in this
-# package's ToolError taxonomy (routes_admin_fastapi/mcp.py
-# _TOOL_ERROR_STATUS keys). Translation is keyed on the BODY's `code`
-# field, message verbatim (single wrap) — deliberately NOT _api_get's
-# HTTPError discriminator ladder, which mislabels the unknown-tool 404
-# as DATA_UNAVAILABLE-adjust-your-arguments (the vet's K-2 evidence).
-_HOSTED_TOOL_ERROR_CODES = frozenset({
-    ToolError.AUTH_REQUIRED, ToolError.INVALID_PARAMS, ToolError.RATE_LIMITED,
-    ToolError.DATA_UNAVAILABLE, ToolError.TIMEOUT, ToolError.CACHE_MISS,
-})
-
-_VERSION_SKEW_MSG = (
-    "The hosted catalog does not know this tool -- likely a package/server "
-    "version skew, not missing data. Update the oxford-ledge-mcp package "
-    "(or report the mismatch) rather than retrying other arguments."
-)
-
-
-def _hosted_error_to_tool_error(parsed, http_status=None, retry_after=None,
-                                raw_text=""):
-    """Translate a hosted MCP-dispatch refusal into the pip ToolError (K-2).
-
-    `parsed` is the hosted refusal body: on the keyed REST leg the JSON
-    error envelope {"status": "error", "error": ..., "code": ...}; on the
-    keyless /mcp leg the `_meta` dict of an isError result (which carries
-    the REST payload verbatim, routes_mcp_public_fastapi.py:603-607).
-    Returns (never raises) so contract tests can feed synthetic bodies
-    straight through and assert the resulting codes.
-
-    Mapping (vet K-2, verbatim requirements):
-      * body `code` in the shared taxonomy -> SAME-NAMED ToolError with the
-        hosted `error` message verbatim (single wrap -- a hosted
-        DATA_UNAVAILABLE must not be re-wrapped into a second envelope);
-      * unknown-tool 404 body ({"status":"error","error":"Unknown tool: X"},
-        no `code`) -> NOT_FOUND with the version-skew directive, NEVER
-        DATA_UNAVAILABLE;
-      * FastAPI's unrouted {"detail": "Not Found"} -> NOT_FOUND likewise;
-      * codeless 401/402/403 (or the /mcp `authentication_required` /
-        requiredTier _meta shapes) -> AUTH_REQUIRED;
-      * codeless 429 -> RATE_LIMITED, honoring Retry-After;
-      * anything else -> DATA_UNAVAILABLE with the hosted message.
-    The API key is NEVER interpolated into any message here (C-3).
+    Fails OPEN to the untagged description: a listing that raises is worse than
+    one missing a hint, and the enforcement is unaffected either way.
     """
-    body = parsed if isinstance(parsed, dict) else {}
-    msg = str(body.get("error") or body.get("message") or raw_text or "").strip()
-
-    code = body.get("code")
-    if code in _HOSTED_TOOL_ERROR_CODES:
-        if code == ToolError.RATE_LIMITED:
-            return ToolError(
-                code, msg or "Oxford Ledge rate limit reached for this caller.",
-                retry_after=retry_after)
-        return ToolError(
-            code, msg or f"Hosted MCP dispatch refused this call ({http_status}).")
-
-    # Unknown tool / unrouted path: version skew, never a data condition.
-    if (msg.startswith("Unknown tool")
-            or http_status == 404
-            or body.get("detail") == "Not Found"):
-        return ToolError(ToolError.NOT_FOUND, _VERSION_SKEW_MSG)
-
-    # /mcp anonymous-premium refusal shape or codeless HTTP auth statuses.
-    if (code == "authentication_required" or body.get("requiredTier")
-            or http_status in (401, 402, 403)):
-        return ToolError(
-            ToolError.AUTH_REQUIRED,
-            (msg or "Oxford Ledge rejected the credentials for this call. "
-                    "The client's operator should check OXFORD_LEDGE_API_KEY "
-                    "is set and not revoked.") + _NO_ASK_OPERATOR)
-
-    if http_status == 429:
-        return ToolError(
-            ToolError.RATE_LIMITED,
-            msg or "Oxford Ledge rate limit reached for this caller.",
-            retry_after=retry_after)
-
-    return ToolError(
-        ToolError.DATA_UNAVAILABLE,
-        f"Hosted MCP dispatch failed ({http_status}): {msg[:500]}"
-        if msg else f"Hosted MCP dispatch failed ({http_status}).")
-
-
-def _read_http_error_body(e):
-    """(parsed_json_or_None, raw_text) from an HTTPError — parse-before-
-    truncate (the 3.2.0 vet K-7 lesson: truncating first makes any envelope
-    over the cut unparseable and mislabels the refusal)."""
-    raw = ""
     try:
-        raw = e.read(65536).decode("utf-8", "replace")
-    except Exception as read_err:
-        # Not silent: an unreadable refusal body downgrades the K-2
-        # translation to status-only mapping, which is worth a trace.
-        _logger.debug("could not read hosted error body: %s", read_err)
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        parsed = None
-    return parsed, raw
+        from oxford_ledge_mcp_core.registry import REGISTRY
+        tier = (REGISTRY.get(name) or {}).get("min_tier")
+    except Exception:  # noqa: BLE001 -- presentation only
+        return description
+    return "[Tier: %s] %s" % (tier or "free", description)
 
 
-def _http_retry_after(e):
-    try:
-        return int(e.headers.get("Retry-After") or 0) or None
-    except Exception:
-        return None
 
+# ── API proxy helper + hosted name-proxy bridge: transport.py since 2026-09-12 ─
+#
+# NOTE 2026-09-12 (third file-size-budget cut, 3.4.0 publish-vet wave C): the
+# TRANSPORT block that stood here -- `_api_get` and its status ladder, the
+# hosted name-proxy bridge `_api_tool_call` with its keyed / keyless legs, the
+# K-2 error translation, `_attach_disclosure` and the two disclosure literals
+# -- moved VERBATIM to oxford_ledge_mcp/transport.py after the wave-B seam
+# work took this file to 2,159 lines. No @mcp_tool lives in that block, so the
+# dispatch order is untouched. Every moved name is re-exported HERE, at the
+# position the block occupied, so the handlers below keep calling `_api_get`
+# / `_api_tool_call` through this module's globals -- which is what keeps a
+# driver's `S._api_get = ...` live for them. The env-derived `_API_URL` /
+# `_API_KEY` above STAY here; transport.py reads them from this module at
+# call time. A hop INSIDE transport.py (`_api_tool_call` ->
+# `_api_tool_call_keyed`) resolves there, not here: patch
+# `oxford_ledge_mcp.transport.<name>` for those. Pinned by the family-cut
+# contract in the main repo (its transport section).
 
-def _attach_disclosure(result, meta=None):
-    """L-3: attribution + not-investment-advice travel on every success.
-    Hosted /mcp _meta values pass through when present; otherwise the
-    package attaches its own copies of the same literals."""
-    if isinstance(result, dict):
-        m = meta if isinstance(meta, dict) else {}
-        result.setdefault("attribution", m.get("attribution") or _OL_ATTRIBUTION)
-        result.setdefault("disclaimer", m.get("disclaimer") or _OL_DISCLAIMER)
-    return result
-
-
-def _api_tool_call(tool, arguments, timeout=30):
-    """POST one hosted MCP tool call and return the unwrapped result.
-
-    C-1 transport split (the vet's blocking condition, both directions
-    load-bearing):
-      * keyed (OXFORD_LEDGE_API_KEY set) -> POST /api/mcp/tool. The
-        validated-key path bypasses the browser-CSRF Origin check AND is
-        correctly METERED against the key's account. Keyed traffic must
-        NOT move to /mcp — the metering gap there (V4) is still open.
-      * keyless -> POST /mcp as JSON-RPC tools/call, the transport
-        DESIGNED for absent-Origin anonymous agents; it enforces the
-        identical cleancore + tier + rate chain through the shared front.
-    NEVER fabricates an Origin header — a keyless caller that spoofed
-    `Origin: https://www.oxfordledge.com` at /api/mcp/tool would turn the
-    cookie-CSRF gate into decoration (the vet's named forbidden fix).
-
-    C-3: the API key rides ONLY in the `x-api-key` header on the keyed
-    leg — never the URL, never the JSON body, never a log line or error
-    message.
-    """
-    if not _API_URL:
-        raise ToolError(
-            ToolError.API_REQUIRED,
-            "This tool requires a running Oxford Ledge instance. "
-            "Set the OXFORD_LEDGE_URL environment variable "
-            "(e.g. OXFORD_LEDGE_URL=https://www.oxfordledge.com)."
-        )
-    args = arguments if isinstance(arguments, dict) else {}
-    if _API_KEY:
-        return _api_tool_call_keyed(tool, args, timeout)
-    return _api_tool_call_keyless(tool, args, timeout)
-
-
-def _api_tool_call_keyed(tool, arguments, timeout):
-    """Keyed leg: POST /api/mcp/tool (metered, key-authenticated)."""
-    data = json.dumps({"tool": tool, "arguments": arguments}).encode("utf-8")
-    req = urllib.request.Request(
-        f"{_API_URL}/api/mcp/tool",
-        data=data,
-        headers={
-            "User-Agent": "OxfordLedgeMCP/1.0",
-            "Content-Type": "application/json",
-            # C-3: header-only. Never a query string, never the body,
-            # never echoed anywhere below.
-            "x-api-key": _API_KEY,
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        parsed, raw = _read_http_error_body(e)
-        raise _hosted_error_to_tool_error(
-            parsed, http_status=e.code, retry_after=_http_retry_after(e),
-            raw_text=raw[:500])
-    except urllib.error.URLError as e:
-        raise ToolError(
-            ToolError.DATA_UNAVAILABLE,
-            f"Cannot reach Oxford Ledge API at {_API_URL}: {e.reason}")
-    if not isinstance(payload, dict) or payload.get("status") != "ok":
-        raise _hosted_error_to_tool_error(
-            payload if isinstance(payload, dict) else {})
-    # C-5: return the unwrapped `result`, never the hosted envelope.
-    return _attach_disclosure(payload.get("result"))
-
-
-def _api_tool_call_keyless(tool, arguments, timeout):
-    """Keyless leg: POST /mcp tools/call (anonymous-by-design transport)."""
-    data = json.dumps({
-        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-        "params": {"name": tool, "arguments": arguments},
-    }).encode("utf-8")
-    # No Origin header (absent-Origin is ALLOWED there by design — V1),
-    # and no credential: this leg only runs when no key is configured.
-    req = urllib.request.Request(
-        f"{_API_URL}/mcp",
-        data=data,
-        headers={
-            "User-Agent": "OxfordLedgeMCP/1.0",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        parsed, raw = _read_http_error_body(e)
-        raise _hosted_error_to_tool_error(
-            parsed, http_status=e.code, retry_after=_http_retry_after(e),
-            raw_text=raw[:500])
-    except urllib.error.URLError as e:
-        raise ToolError(
-            ToolError.DATA_UNAVAILABLE,
-            f"Cannot reach Oxford Ledge API at {_API_URL}: {e.reason}")
-    if not isinstance(payload, dict):
-        raise ToolError(ToolError.DATA_UNAVAILABLE,
-                        "Malformed /mcp response (not a JSON object).")
-    if payload.get("error"):
-        _err = payload["error"] if isinstance(payload["error"], dict) else {}
-        raise ToolError(
-            ToolError.DATA_UNAVAILABLE,
-            f"/mcp transport error: {_err.get('message') or payload['error']}")
-    res = payload.get("result") if isinstance(payload.get("result"), dict) else {}
-    text = ""
-    for c in (res.get("content") or []):
-        if isinstance(c, dict) and c.get("type") == "text":
-            text = c.get("text") or ""
-            break
-    meta = res.get("_meta") if isinstance(res.get("_meta"), dict) else {}
-    if res.get("isError"):
-        # _meta carries the REST refusal payload verbatim (incl. `code`).
-        raise _hosted_error_to_tool_error(meta, raw_text=text)
-    try:
-        result = json.loads(text)
-    except Exception:
-        raise ToolError(ToolError.DATA_UNAVAILABLE,
-                        "Malformed /mcp tool result (non-JSON content).")
-    return _attach_disclosure(result, meta)
+from oxford_ledge_mcp.transport import (  # noqa: F401  (re-exports)
+    _UPSTREAM_TEXT_CAP,
+    _excerpt,
+    _is_loopback_host,
+    _authenticated_request,
+    _parse_json_body,
+    _api_get,
+    _api_error_sentence,
+    _OL_ATTRIBUTION,
+    _OL_DISCLAIMER,
+    _NO_ASK_OPERATOR,
+    _HOSTED_TOOL_ERROR_CODES,
+    _VERSION_SKEW_MSG,
+    _BARE_CODE_TOKEN,
+    _OL_PUBLIC_ORIGIN,
+    _OL_KEYS_URL,
+    _TIER_TOKEN_RE,
+    _UPGRADE_PATH_RE,
+    _tier_token,
+    _tier_refusal_message,
+    _hosted_error_to_tool_error,
+    _read_http_error_body,
+    _http_retry_after,
+    _nonblank,
+    _attach_disclosure,
+    _api_tool_call,
+    _api_tool_call_keyed,
+    _api_tool_call_keyless,
+)
 
 
 # ── Standalone tool implementations (work without API) ────────────────────────
@@ -1008,6 +365,162 @@ def _safe(v, default=None):
         return default
 
 
+def _route_fault(data, ticker, key, noun, path):
+    """The reshaping handlers' third error vocabulary (3.4.0 vet
+    b03-ownership-1, BLOCK; CISO/COUNSEL/CHAOS co-signed).
+
+    /api/institutional-holders answers HTTP 200 with
+    `{"ticker", "holders": [], "error": "PostgreSQL not available"}`
+    (data/institutional_holdings.py:1255) and with `str(e)` of a swallowed
+    helper exception -- a statement timeout, measured on this very route
+    (:1453); options_insiders.py:639-640 wraps both in JSONResponse(200), so
+    `_api_get`'s status ladder never fires. `tool_get_holders` rebuilt its
+    payload from `holders` alone, dropped the route's `error`, and served
+    `holders: []` with `complete: true` -- a backend outage cached for 3600s
+    as the FACT "this issuer has no institutional holders".
+
+    Returns the sentence to ship as the payload's `error` (a plain string:
+    the same RETURNED vocabulary as `non_object_response`, never raised, so
+    the collection key survives for learned-key compatibility) when the
+    body carries an `error` or is an EMPTY object; None for a normal body.
+    The route's own text rides inside verbatim -- it is envelope vocabulary
+    and the fail-closed filter keeps a string `error` -- and the sentence
+    denies the false reading by name, the way the non-object envelope does.
+    The dispatcher seam (B3) declines to cache a dict carrying a string
+    `error`, so the outage is never served for an hour.
+    """
+    err = data.get("error")
+    if err:
+        text = err.strip() if isinstance(err, str) else json.dumps(err, sort_keys=True)
+        return (
+            f"{path} reported an error for '{ticker}': {text} -- the empty "
+            f"{key} list is a placeholder for a FAILED read and NOT a "
+            f"finding: it does not mean {ticker} has no {noun}. Retry later "
+            f"rather than restating the empty list."
+        )
+    if not data:
+        return (
+            f"{path} answered with HTTP success for '{ticker}', but the body "
+            f"was an empty JSON object with no '{key}' key -- the empty {key} "
+            f"list is a placeholder for an unreadable response and NOT a "
+            f"finding: it does not mean {ticker} has no {noun}."
+        )
+    return None
+
+
+# b03-ownership-2 (3.4.0 vet): a legitimately empty list is a SCOPED
+# statement, never a bare `[]` + `complete: true`. The scope is the route's
+# (pg_get_institutional_holders_rows: position_type='COM', DISTINCT ON
+# fund_cik under a 6-quarter floor, tickers in the 13F universe).
+_HOLDERS_EMPTY_SCOPE_NOTE = (
+    "No institutional holders returned for {ticker}. Scope of this list: "
+    "13F-HR common-stock (COM) positions only, one row per filer at its "
+    "latest filing, filers within the last 6 quarters, and only tickers in "
+    "the 13F universe. An empty list is a statement about that scope -- "
+    "not evidence that nobody holds {ticker}."
+)
+
+
+# ── `_meta.derived_fields` on the two RESHAPING tools (d2-wheel-prose-3) ─────
+# The 9 REST proxies carry the route's `_meta` verbatim, and README.md defines
+# `derived_fields` as "paths in the tool's own key names". Seven of the nine
+# pass the route's payload through, so the route's paths ARE the tool's. The
+# two reshaping handlers (get_holders, get_insider_trades) rebuild the payload
+# under their own keys -- and passed the route's `_meta` through untouched, so
+# the wheel wire named `transactions[].totalValue` over a payload whose rows
+# live under `trades` with `value`, and `holders[].change_type` /
+# `shares_change` / `pct_change` / `includes_sub_managers` over rows that are
+# {holder, shares, value, type, quarter, filingDate} (those four are not on
+# the get_holders emit allowlist and can never ship), while the wheel's OWN
+# derivations the descriptions name (`vintages`, `rankingBasis`,
+# `transTypeLabel`, `is_open_market`) were absent from the list. An agent
+# asked which values must be attributed was pointed at keys not on its wire
+# (measured 2026-09-13 with `_meta` built by the tree's own
+# middleware.route_provenance.build_provenance_meta). The route's block is
+# still the source of truth for `source` / `basis` / `terms_url`; only the
+# PATHS are translated, at the reshape, from one small map per tool.
+#
+# Map value None = the route path names a key this tool never emits: DROP.
+# A route path not in the map is kept iff it resolves on the wheel payload.
+_INSIDER_DERIVED_PATH_MAP = {
+    "transactions[].totalValue": "trades[].value",
+    "transactions[].position": "trades[].position",
+}
+_INSIDER_ROW_KEY_MAP = {"totalValue": "value", "insiderName": "insider",
+                        "transType": "type"}
+#: The wheel's own derivations over the Form 4 row (server-side decode /
+#: classification), listed when the payload carries them.
+_INSIDER_WHEEL_DERIVED = ("trades[].value", "trades[].position",
+                          "trades[].transTypeLabel", "trades[].is_open_market")
+_HOLDERS_DERIVED_PATH_MAP = {
+    "holders[].change_type": None,
+    "holders[].shares_change": None,
+    "holders[].pct_change": None,
+    "holders[].includes_sub_managers": None,
+}
+_HOLDERS_WHEEL_DERIVED = ("vintages", "rankingBasis")
+
+
+def _payload_has_path(payload, path):
+    """True when a `derived_fields` path resolves on *payload*: `a.b` walks
+    dicts, `a[].b` walks every row of a list (an EMPTY list cannot disprove
+    the key -- README: "a path may name a key only one branch emits"), and
+    `a.*` needs `a` to be a dict."""
+    node = payload
+    for seg in path.split("."):
+        if seg == "*":
+            return isinstance(node, dict)
+        if seg.endswith("[]"):
+            node = node.get(seg[:-2]) if isinstance(node, dict) else None
+            if not isinstance(node, list):
+                return False
+            rows = [r for r in node if isinstance(r, dict)]
+            if not rows:
+                return True
+            node = rows[0]
+            continue
+        if not isinstance(node, dict) or seg not in node:
+            return False
+        node = node[seg]
+    return True
+
+
+def _remap_derived_fields(meta, payload, path_map, wheel_derived,
+                          row_key_map=None, route_rows="transactions[].",
+                          wheel_rows="trades[]."):
+    """Return a COPY of the route's `_meta` whose `derived_fields` name THIS
+    tool's keys. Untouched unless `basis` is hybrid and the list is a list;
+    `source`, `basis`, `terms_url` and every other key ride through as the
+    route wrote them. A translated or unmapped path survives only if it
+    resolves on *payload* (the wire this block describes); the wheel's own
+    derivations are appended on the same condition."""
+    if not isinstance(meta, dict):
+        return meta
+    out = dict(meta)
+    fields = out.get("derived_fields")
+    if out.get("basis") != "hybrid" or not isinstance(fields, list):
+        return out
+    translated = []
+    for p in fields:
+        if not isinstance(p, str):
+            continue
+        if p in path_map:
+            q = path_map[p]
+        elif row_key_map is not None and p.startswith(route_rows):
+            key = p[len(route_rows):]
+            q = wheel_rows + row_key_map.get(key, key)
+        else:
+            q = p
+        if q is None or q in translated or not _payload_has_path(payload, q):
+            continue
+        translated.append(q)
+    for q in wheel_derived:
+        if q not in translated and _payload_has_path(payload, q):
+            translated.append(q)
+    out["derived_fields"] = translated
+    return out
+
+
 @mcp_tool(name="get_holders", cache=FUNDAMENTAL)
 def tool_get_holders(args):
     """Top institutional holders from SEC 13F filings.
@@ -1015,64 +528,144 @@ def tool_get_holders(args):
     Oxford Ledge's SEC EDGAR integration). Migration path for future
     standalone support: call SEC EDGAR 13F endpoint directly."""
     ticker = normalize_ticker(args.get("ticker"))
+    # b03-ownership-3 (3.4.0 vet): an empty ticker used to ride out as
+    # `?ticker=` and come back as the route's 400 dressed as DATA_UNAVAILABLE
+    # ("API returned 400: No ticker provided") -- an argument error reported
+    # as a data condition. Refuse BEFORE any fetch, with the code an agent
+    # can act on.
+    if not ticker:
+        raise ToolError(ToolError.INVALID_PARAMS, "ticker is required")
     # 2026-08-10 field test #2: /api/13f-holdings never existed — the live
     # route is /api/institutional-holders (404'd on every call).
     data = _api_get("/api/institutional-holders", {"ticker": ticker})
     if not isinstance(data, dict):
-        return {"ticker": ticker, "holders": []}
+        return non_object_response(ticker, "holders", "institutional holders", "/api/institutional-holders", data)
     raw = data.get("holders") or data.get("filings") or []
     holders = []
     for row in raw[:10]:
-        holders.append({
+        holder = {
             # Field test #3 (2026-08-10): the live rows carry fund_name /
             # value_usd (data/institutional_holdings.get_institutional_holders)
             # -- the old chain read keys this route never emits, so holder
             # rendered "" beside correct share counts.
             "holder": str(row.get("fund_name") or row.get("holder") or row.get("name") or ""),
             "shares": _safe(row.get("shares")),
-            "value": _safe(row.get("value_usd") or row.get("value")),
+            # b03-ownership-5: `is not None`, not an or-chain -- a filed
+            # value_usd of 0 is a value, and the or-chain served it as null.
+            "value": _safe(row.get("value_usd") if row.get("value_usd") is not None
+                           else row.get("value")),
             "type": "institutional",
-        })
-    return {"ticker": ticker, "holders": holders}
+        }
+        holder.update(row_vintage(row))  # T7: quarter + filingDate, when the row has them
+        holders.append(holder)
+    fault = _route_fault(data, ticker, "holders", "institutional holders",
+                         "/api/institutional-holders")
+    out = {"ticker": ticker, "holders": holders,
+           # 2026-09-05 field-report-#2 F5: the [:10] cut was silent -- an
+           # agent could not tell "10 holders exist" from "10 of 2,400 shown".
+           # Same returned/total discipline as the ol_bdc_* completeness block.
+           # b03-ownership-1: on a faulted body `complete` and `totalHolders`
+           # are null -- unknown, never `true` over a list the route could not
+           # fill.
+           "completeness": {
+               "returned": len(holders),
+               "totalFetched": len(raw),
+               "totalHolders": None if fault else data.get("total_holders"),
+               "complete": None if fault else ((len(raw) <= 10) if raw else True),
+           }}
+    if fault:
+        out["error"] = fault
+    elif not holders:
+        out["note"] = _HOLDERS_EMPTY_SCOPE_NOTE.format(ticker=ticker)
+    # T7 (2026-09-12): a single asOf ONLY when every returned row shares one
+    # quarter, else vintages[] + rankingBasis; the route's coverage block rides
+    # through. The measurement and the rule: oxford_ledge_mcp_core.holders_vintage.
+    out.update(holders_disclosure(holders, data))
+    # 3.4.0 vet (COUNSEL F-1 / CHAOS K-11): the reshape rebuilt the payload
+    # and DROPPED the route's `_meta` -- the provenance block route_provenance
+    # attaches (source / basis / terms_url). Carry it through when present so
+    # the wheel inherits the route's citation with no wheel-side table --
+    # with `derived_fields` translated to THIS payload's keys (d2-wheel-
+    # prose-3): the route's four QoQ paths never ship here, and the wheel's
+    # own `vintages` / `rankingBasis` are named when served.
+    if isinstance(data.get("_meta"), dict):
+        out["_meta"] = _remap_derived_fields(
+            data["_meta"], out, _HOLDERS_DERIVED_PATH_MAP, _HOLDERS_WHEEL_DERIVED)
+    return out
 
 
-@mcp_tool(name="get_sec_filings", cache=FUNDAMENTAL)
-def tool_get_sec_filings(args):
-    ticker = normalize_ticker(args.get("ticker"))
-    filing_type = args.get("filing_type", "").strip()
-    try:
-        # 2026-08-10 field test #2: no filing_type used to silently default
-        # to 10-K while the manifest advertised 10-K/10-Q/8-K/DEF 14A — a
-        # no-arg call returned ten 10-Ks. Absent type now means ALL forms.
-        # (Also dropped the duplicated action=getcompany query param.)
-        _type_q = f"&type={filing_type}" if filing_type else ""
-        cik_url = (
-            f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company=&CIK={ticker}"
-            f"{_type_q}&dateb=&owner=include&count=10&search_text=&output=atom"
-        )
-        req = urllib.request.Request(cik_url, headers={"User-Agent": "OxfordLedge contact@oxfordledge.com"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = resp.read().decode("utf-8")
-        import xml.etree.ElementTree as ET
-        root = ET.fromstring(data)
-        ns = {"atom": "http://www.w3.org/2005/Atom"}
-        entries = root.findall(".//atom:entry", ns)
-        filings = []
-        for entry in entries[:10]:
-            title = entry.findtext("atom:title", "", ns)
-            link = entry.find("atom:link", ns)
-            href = link.get("href", "") if link is not None else ""
-            updated = entry.findtext("atom:updated", "", ns)
-            filings.append({"title": title, "url": href, "date": updated[:10] if updated else ""})
-        return {"ticker": ticker, "filings": filings}
-    except Exception as e:
-        # 2026-09-05 (field-test F8): str(e) surfaced raw XML ParseError text
-        # ("syntax error: line 2, column 61") for a bad ticker -- an envelope
-        # that reads like OUR bug. Match get_fundamentals' clean-miss shape;
-        # the detail stays in the envelope for debugging, labeled as such.
-        return {"ticker": ticker, "filings": [],
-                "error": f"Could not load EDGAR filings for '{ticker}' -- check "
-                         f"the ticker symbol. (upstream: {type(e).__name__})"}
+# 2026-09-12 (file-size-budget cut, 3.4.0 publish-vet wave): the standalone
+# SEC family -- _SEC_TICKER_RE / _reject_bad_sec_ticker / _SEC_ARCHIVE /
+# tool_get_sec_filings, plus _resolve_ticker_to_cik_via_sec (shared with
+# tool_get_13f_holdings below) -- moved VERBATIM to oxford_ledge_mcp/sec_tools.py.
+# The import sits at the EXACT position the block occupied: @mcp_tool registers
+# at definition time, so this line IS get_sec_filings' registration and keeps
+# TOOL_DISPATCH insertion order identical. Every moved name is re-exported.
+from oxford_ledge_mcp.sec_tools import (  # noqa: F401  (re-exports)
+    _SEC_ARCHIVE,
+    _SEC_TICKER_RE,
+    _reject_bad_sec_ticker,
+    _resolve_ticker_to_cik_via_sec,
+    tool_get_sec_filings,
+)
+
+
+# 2026-09-05 field-report-#2 F5-d: Form 4 transaction codes shipped as raw
+# SEC letters ("P", "F") with no decode ring anywhere in the chain. Labels
+# verified against the ingest writer's own code domain
+# (tools/fetch_form4_transactions.py TRANSACTION_CODES -- the 18 codes it
+# classifies); is_open_market mirrors that map exactly (True only for P/S).
+_FORM4_CODE_LABELS = {
+    "P": "Open-market purchase",
+    "S": "Open-market sale",
+    "A": "Award/grant",
+    "D": "Disposition to issuer",
+    "F": "Tax withholding",
+    "M": "Option exercise/conversion",
+    "G": "Gift",
+    "J": "Other",
+    "K": "Equity swap",
+    "U": "Tender of shares",
+    "W": "Acquisition/disposition by will or inheritance",
+    "X": "In-the-money option exercise",
+    "Z": "Deposit into/withdrawal from voting trust",
+    "C": "Conversion of derivative security",
+    "I": "Discretionary transaction",
+    "O": "Out-of-the-money option exercise",
+    "H": "Expiration of long derivative position",
+    "L": "Small acquisition (Rule 16a-6)",
+}
+
+
+def _cents(v):
+    """Round a monetary float to cents; pass non-numbers through unchanged.
+
+    Applied to `value` (an OL-computed shares x price product whose float
+    noise -- 52320.00000000001 -- motivated the 2026-09-05 F5(c) rounding)
+    and NEVER to `pricePerShare`: that is the FILED figure, reported by Form 4
+    filers to four decimals, and rounding it turned a $0.0045 purchase into
+    "$0.0" beside a non-zero value (3.4.0 vet b03-ownership-9)."""
+    return round(v, 2) if isinstance(v, float) else v
+
+
+# The producing helper's window: pg_get_insider_activity(ticker, limit=20),
+# `ORDER BY filing_date DESC LIMIT 20` (pg_db/queries/insiders.py); the route
+# passes no limit. `totalFetched` can therefore never exceed 20 and is NOT
+# the issuer's Form 4 history -- b03-ownership-11 (3.4.0 vet).
+_INSIDER_ROUTE_WINDOW = 20
+
+_INSIDER_COMPLETENESS_BASIS = (
+    "totalFetched counts the route's window -- the latest 20 Form 4 rows by "
+    "filing date -- not the issuer's full history; complete is null when "
+    "that window came back full (20 rows), because more may exist beyond it."
+)
+
+_INSIDER_EMPTY_SCOPE_NOTE = (
+    "No Form 4 rows returned for {ticker}. Scope of this list: Form 4 "
+    "transactions filed for this issuer ticker and its share-class siblings, "
+    "the latest 20 by filing date. An empty list means none are in that "
+    "window of the store -- not that no insider has ever traded {ticker}."
+)
 
 
 @mcp_tool(name="get_insider_trades", cache=FUNDAMENTAL)
@@ -1082,16 +675,54 @@ def tool_get_insider_trades(args):
     form4_transactions table (176K rows) which sources directly from
     SEC EDGAR — more authoritative than yfinance's scraped view."""
     ticker = normalize_ticker(args.get("ticker"))
+    # b03-ownership-10 (3.4.0 vet): with no ticker the route silently switches
+    # to its MARKET-WIDE branch (market_passthrough.py: pg_get_recent_insider_
+    # buys) and this reshape dropped each row's issuer ticker, so the wheel
+    # served open-market buys from arbitrary issuers under `ticker: ""`.
+    # Refuse BEFORE any fetch.
+    if not ticker:
+        raise ToolError(ToolError.INVALID_PARAMS, "ticker is required")
     data = _api_get("/api/insider-activity", {"ticker": ticker})
     if not isinstance(data, dict):
-        return {"ticker": ticker, "trades": []}
+        return non_object_response(ticker, "trades", "insider transactions", "/api/insider-activity", data)
     raw = data.get("transactions") or data.get("trades") or []
     trades = []
-    for row in raw[:15]:
+    # d2-wheel-prose-2 (2026-09-13 deep audit, FIX-BEFORE-PUBLISH): this was
+    # `raw[:15]` under a description and a README that both say "the latest
+    # 20 rows by filing date (the route's window)" -- rows 16-20 of the
+    # window were unreachable through the tool (it has no limit argument)
+    # and only the completeness block admitted it. The cut is the route's
+    # own window now, so the sentence is true and `complete` keeps its
+    # b03-ownership-11 meaning (null when the window came back full).
+    for row in raw[:_INSIDER_ROUTE_WINDOW]:
         # 2026-08-10 field test #2: the wire contract is camelCase
         # (schemas/responses.py InsiderActivityTxn: insiderName /
         # transactionType) — the old chains read keys the API never emits,
         # so every row rendered an empty insider + type beside real shares.
+        # 2026-09-05 field-report-#2 F5-b: the old date chain preferred
+        # filingDate SILENTLY (transactionDate was last in the chain and,
+        # until the same-day pg helper fix, never on the wire at all). Both
+        # dates ship explicitly, with dateBasis saying which one "date"
+        # carries. "date" keeps the SAME value it emitted before this change
+        # (filingDate-preferred) -- learned-key compatibility.
+        #
+        # b03-ownership-7 (3.4.0 vet, BLOCK): dateBasis used to say
+        # "transaction" whenever a transactionDate EXISTED while `date` was
+        # filingDate-first -- so on every live row (the helper SELECTs both
+        # dates) the label named a basis the value did not have. The label
+        # now names the date actually served: the two are assigned TOGETHER
+        # from one branch, so they cannot disagree.
+        code = (row.get("transType") or row.get("transactionType")
+                or row.get("type") or row.get("transactionCode") or "")
+        txn_date = row.get("transactionDate") or ""
+        filing_date = row.get("filingDate") or ""
+        if filing_date:
+            date_val, date_basis = filing_date, "filing"
+        elif txn_date:
+            date_val, date_basis = txn_date, "transaction"
+        else:
+            # the legacy `date` key (no live route emits it): no basis claimed
+            date_val, date_basis = (row.get("date") or ""), None
         trades.append({
             # Field test #3: /api/insider-activity rows come from
             # pg_get_insider_activity, whose SQL aliases are the wire SOT:
@@ -1099,382 +730,86 @@ def tool_get_insider_trades(args):
             # The InsiderActivityTxn schema keys belong to a different route
             # family -- pin to the helper's aliases, not the lookalike model.
             "insider": str(row.get("insiderName") or row.get("insider") or row.get("name") or row.get("reportingOwner") or ""),
+            "position": row.get("position"),
             "shares": _safe(row.get("shares") or row.get("transactionShares")),
-            "value": _safe(row.get("totalValue") or row.get("value") or row.get("transactionValue")),
-            "type": row.get("transType") or row.get("transactionType") or row.get("type") or row.get("transactionCode") or "",
-            "date": row.get("filingDate") or row.get("date") or row.get("transactionDate") or "",
+            # b03-ownership-9: the FILED price, unrounded (see _cents).
+            "pricePerShare": _safe(row.get("pricePerShare")),
+            "value": _cents(_safe(row.get("totalValue") or row.get("value") or row.get("transactionValue"))),
+            "sharesOwned": _safe(row.get("sharesOwned")),
+            "type": code,
+            "transTypeLabel": _FORM4_CODE_LABELS.get(str(code).strip().upper()),
+            "is_open_market": str(code).strip().upper() in ("P", "S"),
+            "transactionDate": txn_date,
+            "filingDate": filing_date,
+            "dateBasis": date_basis,
+            "date": date_val,
+            # b03-ownership-8: the route labels derivative-table rows
+            # (insiders.py `securityTitle` / `isDerivative`, on EVERY row);
+            # the reshape dropped both, so an RSU award or an option leg read
+            # as "50,000 shares" of common stock. Passed through as the
+            # helper emits them -- NULL means "the filing did not say", never
+            # a claimed "not a derivative".
+            "securityTitle": row.get("securityTitle"),
+            "isDerivative": row.get("isDerivative"),
+            "url": row.get("url"),
         })
-    return {"ticker": ticker, "trades": trades}
-
-
-@mcp_tool(name="get_fundamentals", cache=FUNDAMENTAL, heavy=True)
-def tool_get_fundamentals(args):
-    """Get XBRL fundamentals from SEC EDGAR directly."""
-    ticker = normalize_ticker(args.get("ticker"))
-    try:
-        # Step 1: Resolve ticker to CIK
-        tickers_url = "https://www.sec.gov/files/company_tickers.json"
-        req = urllib.request.Request(tickers_url, headers={"User-Agent": "OxfordLedge contact@oxfordledge.com"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            tickers_data = json.loads(resp.read().decode("utf-8"))
-        cik = None
-        for entry in tickers_data.values():
-            if normalize_ticker(entry.get("ticker")) == ticker:
-                cik = str(entry["cik_str"]).zfill(10)
-                break
-        if not cik:
-            raise ToolError(ToolError.DATA_UNAVAILABLE, f"Could not find CIK for ticker '{ticker}'")
-
-        # Step 2: Get company facts from XBRL
-        facts_url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
-        req = urllib.request.Request(facts_url, headers={"User-Agent": "OxfordLedge contact@oxfordledge.com"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            facts = json.loads(resp.read().decode("utf-8"))
-
-        us_gaap = facts.get("facts", {}).get("us-gaap", {})
-        if not us_gaap:
-            raise ToolError(ToolError.DATA_UNAVAILABLE, f"No XBRL data found for '{ticker}'")
-
-        # Extract key line items
-        line_items = {
-            "Revenue": ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet",
-                        # investment companies (BDCs) tag revenue as gross
-                        # investment income. 3.2.0 vet K-6 execution removed
-                        # the sibling rung InvestmentIncomeOperating here:
-                        # SEC frames CY2015+CY2023 report ZERO filers for it
-                        # and both flagship BDC companyconcepts 404 -- a
-                        # never-matching rung (the OCF defect class), while
-                        # this one shows 182 filers in CY2023.
-                        "GrossInvestmentIncomeOperating"],
-            "NetIncome": ["NetIncomeLoss"],
-            "EPS": ["EarningsPerShareDiluted", "EarningsPerShareBasic"],
-            "TotalAssets": ["Assets"],
-            "TotalLiabilities": ["Liabilities"],
-            "StockholdersEquity": ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"],
-            # 2026-08-24 MCP audit: the old sole rung named a NON-EXISTENT
-            # us-gaap concept (SEC companyconcept 404-verified) -- the same
-            # never-matching-rung class as the in-tree sharesOut fix. The
-            # real concept, plus the continuing-operations variant some
-            # filers use.
-            "OperatingCashFlow": ["NetCashProvidedByUsedInOperatingActivities",
-                                  "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"],
-            "TotalDebt": ["LongTermDebt", "LongTermDebtNoncurrent"],
-        }
-
-        # Flow (duration) concepts: a 10-K's companyfacts entries ALSO carry
-        # quarterly duration facts tagged form=10-K/fp=FY, so form+fp alone
-        # mixes Q rows into the annual series (2026-08-10 field test).
-        duration_labels = {"Revenue", "NetIncome", "EPS", "OperatingCashFlow"}
-
-        def _days(e):
-            try:
-                s = _dt.date.fromisoformat(e.get("start", ""))
-                t = _dt.date.fromisoformat(e.get("end", ""))
-                return (t - s).days
-            except ValueError:
-                return -1
-
-        # G1 (2026-09-04, in-tree F4 doctrine in miniature): the
-        # Including... equity rung is parent + NCI. For a filer that
-        # tags ANY non-controlling-interest concept, letting it fill
-        # parent-missing years seats a CONSOLIDATED figure under a
-        # parent-attributable label (the +281% class the in-tree
-        # extractor evicted). Name-matched, with the two families the
-        # in-tree predicate excludes (consolidated totals themselves +
-        # the two pretax ordering-only lines). A no-NCI filer (the
-        # AAON class) keeps the rung -- for them it is arithmetically
-        # the parent figure. False positive costs an honest blank;
-        # false negative is the defect. When in doubt, match.
-        _NCI_EXCL = (
-            "IncomeLossFromContinuingOperationsBeforeIncomeTaxes"
-            "ExtraordinaryItemsNoncontrollingInterest",
-            "IncomeLossFromContinuingOperationsBeforeIncomeTaxes"
-            "MinorityInterestAndIncomeLossFromEquityMethodInvestments",
-        )
-        _has_nci = any(
-            ("Noncontrolling" in c or "MinorityInterest" in c)
-            and c not in _NCI_EXCL and "IncludingPortion" not in c
-            for c in us_gaap)
-        if _has_nci:
-            line_items["StockholdersEquity"] = ["StockholdersEquity"]
-
-        result = {"ticker": ticker, "data": {}}
-        for label, concepts in line_items.items():
-            # Filers SWITCH concepts over a decade (AAPL: Revenues ->
-            # RevenueFromContractWithCustomer... at FY2019), so first-hit
-            # concept selection truncates history. Merge all listed
-            # concepts per period end; earlier-listed concept wins a tie.
-            by_end = {}
-            for concept in reversed(concepts):
-                if concept not in us_gaap:
-                    continue
-                units = us_gaap[concept].get("units", {})
-                # Try USD first, then USD/shares for EPS
-                unit_key = "USD/shares" if label == "EPS" else "USD"
-                entries = units.get(unit_key, [])
-                annual = [e for e in entries
-                          if e.get("form") == "10-K" and e.get("fp") == "FY"
-                          and (label not in duration_labels
-                               or 330 <= _days(e) <= 400)]
-                # Each fiscal year re-appears as a comparative in later
-                # 10-Ks; keep ONE row per period end -- the latest-filed
-                # within a concept (restatements win), then let the
-                # higher-priority concept override cross-concept.
-                per_concept = {}
-                for e in annual:
-                    k = e.get("end", "")
-                    prev = per_concept.get(k)
-                    if prev is None or e.get("filed", "") > prev.get("filed", ""):
-                        per_concept[k] = e
-                by_end.update(per_concept)
-            if not by_end:
-                continue
-            newest_first = sorted(by_end.values(),
-                                  key=lambda x: x.get("end", ""),
-                                  reverse=True)
-            result["data"][label] = [
-                {"period": e.get("end", ""), "value": e.get("val")}
-                for e in newest_first[:10]
-            ]
-        return result
-    except ToolError:
-        raise
-    except Exception as e:
-        raise ToolError(ToolError.DATA_UNAVAILABLE, f"EDGAR XBRL lookup failed for '{ticker}': {e}")
-
-
-#: Trading days pulled per series when the caller asks for history. ~252 in a
-#: year; 400 covers a year plus the slack for holidays and a stale tail without
-#: a second request per series.
-_YC_HISTORY_LIMIT = 400
-#: How far a matched "a year ago" observation may sit from the 365-day target
-#: before it is refused. A curve is only comparable against a real prior point;
-#: silently pairing today against a value 5 months old would answer the
-#: steepening question with a number that does not mean what it says.
-_YC_LOOKBACK_TOLERANCE_DAYS = 45
-
-
-def _yc_pick_year_ago(observations, latest_date):
-    """The observation closest to one year before ``latest_date``, or None.
-
-    ``observations`` is FRED's newest-first list. Returns None rather than the
-    nearest available point when nothing lands within the tolerance -- a
-    comparison against whatever happens to be oldest is worse than no
-    comparison, because the caller cannot see how far off it is.
-    """
-    import datetime as _dt
-
-    try:
-        anchor = _dt.date.fromisoformat(latest_date) - _dt.timedelta(days=365)
-    except (TypeError, ValueError):
-        return None
-    best, best_gap = None, None
-    for o in observations:
-        if o.get("value") in (None, ".", ""):
-            continue
-        try:
-            d = _dt.date.fromisoformat(o.get("date", ""))
-        except ValueError:
-            continue
-        gap = abs((d - anchor).days)
-        if best_gap is None or gap < best_gap:
-            best, best_gap = o, gap
-    if best is None or best_gap > _YC_LOOKBACK_TOLERANCE_DAYS:
-        return None
-    return best
-
-
-@mcp_tool(name="get_yield_curve", cache=FUNDAMENTAL)
-def tool_get_yield_curve(args):
-    """Get Treasury yield curve from FRED.
-
-    include_history=true adds the same curve as of ~1 year ago, for
-    steepening/inversion work.
-
-    2026-08-11 (#30): this handler did not read `args` AT ALL, while its
-    inputSchema declared `include_history`. The dispatcher's own contract
-    (`_echo_params_accepted`, mcp_server.py) is deliberately named
-    params_ACCEPTED rather than honored because a downstream hop can drop a
-    value it validated -- and this was a live instance of exactly that gap: a
-    caller passed include_history, saw it echoed as accepted, and got the
-    current curve regardless. Closing it per-tool is what that docstring
-    prescribes.
-
-    History costs no extra REQUESTS. The same one-call-per-series loop asks for
-    a wider window and reads both ends out of it, so the difference is response
-    size rather than round trips.
-    """
-    fred_key = os.environ.get("FRED_API_KEY", "")
-    if not fred_key:
-        raise ToolError(ToolError.API_REQUIRED, "Set FRED_API_KEY environment variable for yield curve data")
-    include_history = bool(args.get("include_history", False))
-    series_ids = {
-        "1M": "DGS1MO", "3M": "DGS3MO", "6M": "DGS6MO",
-        "1Y": "DGS1", "2Y": "DGS2", "3Y": "DGS3", "5Y": "DGS5",
-        "7Y": "DGS7", "10Y": "DGS10", "20Y": "DGS20", "30Y": "DGS30",
-    }
-    limit = _YC_HISTORY_LIMIT if include_history else 1
-    curve, year_ago, as_of = {}, {}, {}
-    for label, sid in series_ids.items():
-        try:
-            url = (
-                f"https://api.stlouisfed.org/fred/series/observations"
-                f"?series_id={sid}&api_key={fred_key}&file_type=json"
-                f"&sort_order=desc&limit={limit}"
-            )
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            obs = data.get("observations", [])
-            if not obs or obs[0].get("value") == ".":
-                continue
-            curve[label] = float(obs[0]["value"])
-            as_of[label] = obs[0].get("date")
-            if include_history:
-                prior = _yc_pick_year_ago(obs[1:], obs[0].get("date"))
-                if prior:
-                    year_ago[label] = float(prior["value"])
-        except Exception:
-            continue
-    if not curve:
-        raise ToolError(ToolError.DATA_UNAVAILABLE, "Could not fetch yield curve data from FRED")
-    out = {"yield_curve": curve, "as_of": as_of, "source": "FRED"}
-    if include_history:
-        # Emitted even when EMPTY, and that is deliberate: the caller asked for
-        # history, so the key must be present to say it was applied. Omitting
-        # it on a miss is indistinguishable from ignoring the parameter, which
-        # is the bug being fixed.
-        out["yield_curve_1y_ago"] = year_ago
-        out["history_coverage"] = {
-            "maturities_with_prior": len(year_ago),
-            "maturities_total": len(curve),
-            "lookback_tolerance_days": _YC_LOOKBACK_TOLERANCE_DAYS,
-        }
+    fault = _route_fault(data, ticker, "trades", "insider transactions",
+                         "/api/insider-activity")
+    window_full = len(raw) >= _INSIDER_ROUTE_WINDOW
+    out = {"ticker": ticker, "trades": trades,
+           # F5 (2026-09-05): the (then [:15]) cut was silent -- same
+           # returned/total discipline as the ol_bdc_* completeness block.
+           # b03-ownership-11: `complete` is null when the route's 20-row
+           # window came back full -- the store may hold more; and
+           # b03-ownership-1 (sibling): null on a faulted body. With the
+           # cut at the window (d2-wheel-prose-2) a partial window is
+           # served whole, so it is complete by construction.
+           "completeness": {
+               "returned": len(trades),
+               "totalFetched": len(raw),
+               "complete": None if (fault or window_full) else True,
+               "completeness_basis": _INSIDER_COMPLETENESS_BASIS,
+           }}
+    if fault:
+        out["error"] = fault
+    elif not trades:
+        out["note"] = _INSIDER_EMPTY_SCOPE_NOTE.format(ticker=ticker)
+    # `_meta` passthrough: same reason as tool_get_holders -- with the
+    # derived paths renamed to THIS payload's keys (d2-wheel-prose-3).
+    if isinstance(data.get("_meta"), dict):
+        out["_meta"] = _remap_derived_fields(
+            data["_meta"], out, _INSIDER_DERIVED_PATH_MAP,
+            _INSIDER_WHEEL_DERIVED, row_key_map=_INSIDER_ROW_KEY_MAP)
     return out
 
 
-# Third-party / copyrighted FRED-series carve-out (3.1.0; hardened FAIL-CLOSED per the
-# 2026-07-21 CHAOS/DATA_CZAR/COUNSEL compliance review). FRED aggregates 800k+ series;
-# U.S.-government series (BLS / BEA / Census / Federal Reserve / Treasury) are public
-# domain and free to redistribute, but series from private commercial providers (S&P
-# Dow Jones, ICE BofA, Moody's, CBOE, Nasdaq, FTSE Russell, ...) are non-commercial-
-# only and may not be redistributed commercially. This gov-public-data-only package
-# refuses them. FAIL-CLOSED design:
-#   * Primary: fetch /fred/series metadata; if `notes`/`title` shows any copyright or
-#     named-licensor marker, REFUSE.
-#   * If the metadata probe is UNAVAILABLE (network/quota), DO NOT guess-serve — serve
-#     ONLY a series matching the known U.S.-gov source allowlist, else REFUSE.
-#   * Cache ONLY authoritative metadata verdicts (never a probe-failure fallback), so a
-#     transient blip can't poison-cache a carve-out series as clean; recovery self-heals.
-import re as _re
-
-# Copyright / third-party markers in the FRED notes/title (ASCII word, the (c) glyph,
-# or a named commercial licensor) — catches reworded / empty-"copyright" attributions.
-_FRED_THIRDPARTY_NOTE = _re.compile(
-    "copyright|©|all rights reserved|s&p|dow jones|standard & poor|case-shiller|"
-    "ice data|ice bofa|bofa merrill|moody|cboe|nasdaq omx|ftse|russell|msci|bloomberg",
-    _re.IGNORECASE)
-# Known U.S.-government / public-domain source prefixes — the allowlist used ONLY when
-# the metadata probe is unavailable (everything else fails closed / refused).
-_FRED_GOV_PREFIXES = (
-    "DGS", "DFF", "FEDFUNDS", "SOFR", "GDP", "CPIAUCSL", "CPILFESL", "PCEPI", "UNRATE",
-    "PAYEMS", "T10Y", "T5Y", "DTB", "TB3MS", "DFEDTAR", "DEXUS", "DEXJP", "DEXCH",
-    "M1SL", "M2SL", "HOUST", "RSAFS", "INDPRO", "PPIACO", "MICH", "RRPONTSYD", "WALCL")
-_fred_thirdparty_cache: dict[str, str] = {}
+# 2026-09-12 (same cut): tool_get_fundamentals moved VERBATIM to
+# oxford_ledge_mcp/sec_fundamentals.py -- a SEPARATE module from sec_tools.py
+# because get_insider_trades (above) sits between the two SEC handlers and a
+# module registers everything on first import; importing it HERE keeps
+# get_fundamentals at its old slot in TOOL_DISPATCH.
+from oxford_ledge_mcp.sec_fundamentals import tool_get_fundamentals  # noqa: F401  (re-export)
 
 
-def _scrub_fred_key(text: str) -> str:
-    """3.2.0 vet C-6 (defense-in-depth): FRED's documented auth rides the
-    query string, so a urllib error repr can embed the caller's own key.
-    Redact it before any exception text reaches a tool message."""
-    return re.sub(r"api_key=[^&\s'\"]+", "api_key=REDACTED", text)
-
-
-def _fred_series_is_thirdparty(series: str, key: str) -> str:
-    """Fail-closed verdict: "thirdparty" (confirmed copyright), "unknown"
-    (FRED's own metadata endpoint authoritatively says no such series --
-    an id typo, NOT a licensing case), "unverifiable" (probe down; only
-    known-gov prefixes serve), or "" (clear to serve). Only authoritative
-    FRED-metadata verdicts are cached. 2026-09-05 (field-test F8): a typo'd
-    id used to receive the third-party licensing refusal -- confusing and
-    wrong; the split never weakens fail-closed (unknown requires FRED
-    itself confirming nonexistence)."""
-    s = (series or "").upper()
-    if s in _fred_thirdparty_cache:
-        return _fred_thirdparty_cache[s]
-    try:
-        url = (f"https://api.stlouisfed.org/fred/series"
-               f"?series_id={urllib.parse.quote(s)}&api_key={key}&file_type=json")
-        with urllib.request.urlopen(urllib.request.Request(url), timeout=10) as resp:
-            rows = (json.loads(resp.read().decode("utf-8")).get("seriess") or [])
-    except Exception:
-        rows = None  # probe unavailable
-    if rows is not None:
-        # Authoritative FRED answer -> cache it.
-        if rows:
-            meta = (rows[0].get("notes") or "") + " " + (rows[0].get("title") or "")
-            verdict = "thirdparty" if _FRED_THIRDPARTY_NOTE.search(meta) else ""
-        else:
-            verdict = "unknown"  # FRED itself says the series does not exist
-        _fred_thirdparty_cache[s] = verdict
-        return verdict
-    # Probe unavailable: FAIL CLOSED. Serve ONLY a known U.S.-gov series; refuse the
-    # rest. Do NOT cache (so a recovered probe re-decides authoritatively next time).
-    return "" if s.startswith(_FRED_GOV_PREFIXES) else "unverifiable"
-
-
-@mcp_tool(name="get_fred_data", cache=FUNDAMENTAL)
-def tool_get_fred_data(args):
-    """Get FRED economic data series (U.S.-government / public-domain series only)."""
-    fred_key = os.environ.get("FRED_API_KEY", "")
-    if not fred_key:
-        raise ToolError(ToolError.API_REQUIRED, "Set FRED_API_KEY environment variable for FRED data")
-    series = args["series"].strip().upper()
-    _verdict = _fred_series_is_thirdparty(series, fred_key)
-    if _verdict == "unknown":
-        raise ToolError(
-            ToolError.INVALID_PARAMS,
-            f"No FRED series with id '{series}' exists (FRED metadata lookup "
-            f"returned no match). Check the series id -- this is an id problem, "
-            f"not a licensing refusal.")
-    if _verdict == "unverifiable":
-        raise ToolError(
-            ToolError.INVALID_PARAMS,
-            f"FRED series '{series}' could not be verified against FRED metadata "
-            f"(probe unavailable) and is not a known U.S.-government series. This "
-            f"package fails closed on licensing: only confirmed public-domain "
-            f"series serve. Retry later, or use a known gov series (DGS10, "
-            f"CPIAUCSL, UNRATE, ...).")
-    if _verdict:
-        raise ToolError(
-            ToolError.INVALID_PARAMS,
-            f"FRED series '{series}' carries third-party (non-U.S.-government) copyright "
-            f"(e.g. S&P Dow Jones Indices, ICE BofA, Moody's, CBOE) and is licensed for "
-            f"non-commercial use only. This gov-public-data package does not serve it. Use a "
-            f"U.S.-government series (BLS / BEA / Census / Federal Reserve / Treasury), or "
-            f"license the data directly from the copyright holder.")
-    days = int(args.get("days", 365))
-    from datetime import datetime, timedelta
-    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-    try:
-        url = (
-            f"https://api.stlouisfed.org/fred/series/observations"
-            f"?series_id={series}&api_key={fred_key}&file_type=json"
-            f"&observation_start={start_date}&sort_order=desc"
-        )
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        obs = data.get("observations", [])
-        points = []
-        for o in obs:
-            if o.get("value") != ".":
-                points.append({"date": o["date"], "value": float(o["value"])})
-        return {"series": series, "data": points, "count": len(points)}
-    except ToolError:
-        raise
-    except Exception as e:
-        raise ToolError(ToolError.DATA_UNAVAILABLE, f"FRED data fetch failed for '{series}': {_scrub_fred_key(str(e))}")
+# 2026-09-12 (same cut): the FRED family -- _YC_HISTORY_LIMIT /
+# _YC_LOOKBACK_TOLERANCE_DAYS / _yc_pick_year_ago / tool_get_yield_curve /
+# _FRED_THIRDPARTY_NOTE / _FRED_GOV_PREFIXES / _fred_thirdparty_cache /
+# _scrub_fred_key / _fred_series_is_thirdparty / tool_get_fred_data -- moved
+# VERBATIM to oxford_ledge_mcp/fred_tools.py. Imported at the EXACT position the
+# block occupied so get_yield_curve + get_fred_data keep their TOOL_DISPATCH
+# slots. Every moved name is re-exported.
+from oxford_ledge_mcp.fred_tools import (  # noqa: F401  (re-exports)
+    _FRED_GOV_PREFIXES,
+    _FRED_THIRDPARTY_NOTE,
+    _YC_HISTORY_LIMIT,
+    _YC_LOOKBACK_TOLERANCE_DAYS,
+    _fred_series_is_thirdparty,
+    _fred_thirdparty_cache,
+    _scrub_fred_key,
+    _yc_pick_year_ago,
+    tool_get_fred_data,
+    tool_get_yield_curve,
+)
 
 
 # ── API-mode tool implementations ────────────────────────────────────────────
@@ -1501,12 +836,22 @@ def tool_get_corporate_events(args):
 def tool_search_bdc_borrower(args):
     # 2026-08-10 field test #2: /api/bdc/search never existed — the live
     # route is /api/bdc/borrower (same `q` param).
-    return _api_get("/api/bdc/borrower", {"q": args["query"]})
+    # 2026-09-09 (OWNER 2a): was a bare _api_get, so this tool
+    # emitted unfiltered while its twin get_bdc_list was routed
+    # through after COUNSEL F-2. Same boundary, same fix.
+    return filter_to_allowlist("search_bdc_borrower", _api_get("/api/bdc/borrower", {"q": args["query"]}))
 
 
 @mcp_tool(name="get_bdc_list", cache=FUNDAMENTAL)
 def tool_get_bdc_list(args):
-    return _api_get("/api/bdc/list")
+    # 2026-09-08 (COUNSEL F-2): this rode NO emit filter while serving
+    # the same reconciliation keys as get_bdc_holdings, which made the
+    # allowlist a partial boundary rather than the one its header
+    # describes. NB the payload is {"bdcs": [...]}, not a bare list --
+    # `bdcs` is admitted explicitly in the allowlist because it is not
+    # an _ENVELOPE_KEY, and without it the filter fails closed on the
+    # whole response.
+    return filter_to_allowlist("get_bdc_list", _api_get("/api/bdc/list"))
 
 
 @mcp_tool(name="get_bdc_borrower_mark_history", cache=FUNDAMENTAL)
@@ -1515,7 +860,17 @@ def tool_get_bdc_borrower_mark_history(args):
     # was 8 tranches of ONE quarter. This proxies the purpose-built
     # multi-quarter route. New tools register an emit allowlist rather
     # than ship bare (fail-closed redistribution boundary).
-    params = {"q": args["borrower_norm"]}
+    # b06-bdc-marks-3 (3.4.0 vet): `args["borrower_norm"]` escaped the
+    # dispatcher as a bare KeyError and reached the wire as INTERNAL_ERROR
+    # "'borrower_norm'" -- an error that will not say what it is -- while
+    # the sibling name-proxies return INVALID_PARAMS naming the argument.
+    borrower_norm = str(args.get("borrower_norm") or "").strip()
+    if not borrower_norm:
+        raise ToolError(
+            ToolError.INVALID_PARAMS,
+            "`borrower_norm` is required -- take borrowerNorm from a "
+            "search_bdc_borrower result")
+    params = {"q": borrower_norm}
     if args.get("quarters") is not None:
         params["quarters"] = int(args["quarters"])
     return filter_to_allowlist(
@@ -1572,20 +927,181 @@ def tool_ol_bdc_common_borrowers(args):
         _api_tool_call("ol_bdc_common_borrowers", args))
 
 
-# min_tier="plus": canonical premium analytics (see get_options_chain
-# note above). Mirrors mcp_server.py; sf_monetization_v3-compliant.
+# ── The eleven, promoted from IN_TREE_ONLY 2026-09-09 ────────────────────────
+# COUNSEL COMPLIANCE_REVIEW_v1: ADMIT-WITH-CONDITIONS on all eleven, zero
+# refusals, lineage traced handler -> helper SELECT -> ingest per tool. That
+# clears the LICENSING leg; `feedback_public_repo_persona_vet` still needs
+# CISO + CHAOS + OWNER for the publish itself.
+#
+# All eleven are NAME-PROXIES, identical in shape to the three moat tools above:
+# the hosted dispatch owns the data access and every result rides the
+# fail-closed `filter_to_allowlist` (L-2: "the bridge must ride this filter, or
+# bridging widens leakage"). Their allowlists were seeded from LIVE payloads,
+# never from a SELECT list.
+#
+# C5, and the reason none of these is a direct client: `get_activist_stakes` is
+# a WRITE-ON-READ -- it fires a live EDGAR fetch when its cache is >24h stale.
+# Proxied, that call is made by OUR host under OUR rate control and OUR
+# identity. A direct EDGAR client in the wheel would put third-party traffic on
+# a federal endpoint wearing our contact string, which is the shape to avoid.
+
+@mcp_tool(name="ol_form_d_raises", cache=FUNDAMENTAL)
+def tool_ol_form_d_raises(args):
+    """Name-proxy to the hosted ol_form_d_raises (SEC EDGAR Form D private placements)."""
+    return filter_to_allowlist(
+        "ol_form_d_raises",
+        _api_tool_call("ol_form_d_raises", args))
+
+
+@mcp_tool(name="ol_insider_recent_buys", cache=FUNDAMENTAL)
+def tool_ol_insider_recent_buys(args):
+    """Name-proxy to the hosted ol_insider_recent_buys (SEC Form 4 open-market purchases)."""
+    return filter_to_allowlist(
+        "ol_insider_recent_buys",
+        _api_tool_call("ol_insider_recent_buys", args))
+
+
+@mcp_tool(name="get_fails_to_deliver", cache=FUNDAMENTAL)
+def tool_get_fails_to_deliver(args):
+    """Name-proxy to the hosted get_fails_to_deliver (SEC fails-to-deliver, biweekly)."""
+    return filter_to_allowlist(
+        "get_fails_to_deliver",
+        _api_tool_call("get_fails_to_deliver", args))
+
+
+@mcp_tool(name="get_activist_stakes", cache=FUNDAMENTAL)
+def tool_get_activist_stakes(args):
+    """Name-proxy to the hosted get_activist_stakes (SEC EDGAR 13D/G beneficial-owner filings)."""
+    return filter_to_allowlist(
+        "get_activist_stakes",
+        _api_tool_call("get_activist_stakes", args))
+
+
+@mcp_tool(name="ol_treasury_debt", cache=FUNDAMENTAL)
+def tool_ol_treasury_debt(args):
+    """Name-proxy to the hosted ol_treasury_debt (Treasury MSPD, verbatim)."""
+    return filter_to_allowlist(
+        "ol_treasury_debt",
+        _api_tool_call("ol_treasury_debt", args))
+
+
+@mcp_tool(name="ol_cftc_cot", cache=FUNDAMENTAL)
+def tool_ol_cftc_cot(args):
+    """Name-proxy to the hosted ol_cftc_cot (CFTC Commitments of Traders)."""
+    return filter_to_allowlist(
+        "ol_cftc_cot",
+        _api_tool_call("ol_cftc_cot", args))
+
+
+@mcp_tool(name="ol_fdic_bank", cache=FUNDAMENTAL)
+def tool_ol_fdic_bank(args):
+    """Name-proxy to the hosted ol_fdic_bank (FDIC BankFind; `ticker` is OUR CERT map)."""
+    return filter_to_allowlist(
+        "ol_fdic_bank",
+        _api_tool_call("ol_fdic_bank", args))
+
+
+@mcp_tool(name="ol_federal_contracts", cache=FUNDAMENTAL)
+def tool_ol_federal_contracts(args):
+    """Name-proxy to the hosted ol_federal_contracts (USAspending; ticker attribution is OUR crosswalk)."""
+    return filter_to_allowlist(
+        "ol_federal_contracts",
+        _api_tool_call("ol_federal_contracts", args))
+
+
+@mcp_tool(name="ol_patents", cache=FUNDAMENTAL)
+def tool_ol_patents(args):
+    """Name-proxy to the hosted ol_patents (USPTO ODP public filings)."""
+    return filter_to_allowlist(
+        "ol_patents",
+        _api_tool_call("ol_patents", args))
+
+
+@mcp_tool(name="ol_bdc_mark_changes", cache=FUNDAMENTAL, heavy=True)
+def tool_ol_bdc_mark_changes(args):
+    """Name-proxy to the hosted ol_bdc_mark_changes (OL parse of SEC-EDGAR BDC SOIs (ol-derived))."""
+    return filter_to_allowlist(
+        "ol_bdc_mark_changes",
+        _api_tool_call("ol_bdc_mark_changes", args))
+
+
+@mcp_tool(name="ol_bdc_credit_quality", cache=FUNDAMENTAL)
+def tool_ol_bdc_credit_quality(args):
+    """Name-proxy to the hosted ol_bdc_credit_quality (OL parse of SEC-EDGAR BDC SOIs (ol-derived))."""
+    return filter_to_allowlist(
+        "ol_bdc_credit_quality",
+        _api_tool_call("ol_bdc_credit_quality", args))
+
+
+# ── The two plus-gated tools: NAME-PROXIES since the 3.4.0 vet ───────────────
+# min_tier="plus": canonical premium analytics. Mirrors mcp_server.py;
+# sf_monetization_v3-compliant. The wheel does not enforce the tier itself:
+# `_api_tool_call`'s keyed leg (/api/mcp/tool) is metered and tier-gated by
+# the hosted dispatcher, and the keyless leg (/mcp) refuses a plus-gated
+# tool for an anonymous caller with `authentication_required`, which
+# `_hosted_error_to_tool_error` maps to AUTH_REQUIRED.
+#
+# WHY NAME-PROXIES (3.4.0 vet b04-events-capital-1 / -2 / -8, three BLOCKs,
+# and -7). Until 2026-09-12 these two were bare `_api_get` relays of the
+# SPA's REST routes -- /api/debt-maturities and /api/capital-structure --
+# while their descriptions, their allowlists and the hosted catalog were all
+# written for the IN-TREE tools of the same name. Measured on the wire:
+#   * /api/debt-maturities served schedule[].amount in WHOLE DOLLARS
+#     (services/credit_data.py: `amt * 1e6`) under a description that says
+#     "in millions" -- a six-orders-of-magnitude lie on a paid tool; and off
+#     the SPA's warm data_store it FABRICATED a ladder from Finnhub totalDebt
+#     with hard-coded 15/15/12/12/46 buckets (`source: finnhub-estimate`),
+#     vendor lineage through a tool classed GOV_PUBLIC/CLEANCORE.
+#   * /api/capital-structure served a Finnhub-fed capital STRUCTURE snapshot
+#     (layers[]{layer, amount, percentage}) under a description promising the
+#     10-year capital ALLOCATION scorecard -- and with the provider's real key
+#     shape its hit branch is unreachable, so the description was false on
+#     100% of calls.
+# The hosted tools are the EDGAR parse (data/edgar_debt_maturities.py, no
+# vendor leg; amounts in millions; the validation block) and the XBRL
+# scorecard (data/edgar_xbrl._fetch_capital_allocation). Proxying them by
+# NAME serves the shape, the units and the provenance (`_meta`) the
+# descriptions were written for -- the ol_bdc_* / eleven pattern, hardcoded
+# literal tool name (K-1), result through the fail-closed allowlist (L-2),
+# whose entries were re-seeded from an EXECUTED capture of the hosted
+# dispatcher (tests/test_mcp_debt_capital_name_proxy_contract.py). The REST
+# routes' provenance reclassification is a hosted-side change (B5a).
+
 @mcp_tool(name="get_debt_maturities", cache=FUNDAMENTAL, heavy=True, min_tier="plus")
 def tool_get_debt_maturities(args):
-    ticker = normalize_ticker(args.get("ticker"))
-    return _api_get("/api/debt-maturities", {"ticker": ticker})
+    """Name-proxy to the hosted get_debt_maturities (SEC EDGAR 10-K/20-F footnote parse; Plus tier -- keyed leg)."""
+    return filter_to_allowlist(
+        "get_debt_maturities",
+        _api_tool_call("get_debt_maturities", args))
 
 
-# min_tier="plus": canonical premium analytics (see get_options_chain
-# note above). Mirrors mcp_server.py; sf_monetization_v3-compliant.
 @mcp_tool(name="get_capital_allocation", cache=FUNDAMENTAL, heavy=True, min_tier="plus")
 def tool_get_capital_allocation(args):
-    ticker = normalize_ticker(args.get("ticker"))
-    return _api_get("/api/capital-structure", {"ticker": ticker})
+    """Name-proxy to the hosted get_capital_allocation (SEC EDGAR XBRL scorecard: up to 30 fiscal-year labels, 10-year summary window; Plus tier -- keyed leg)."""
+    return filter_to_allowlist(
+        "get_capital_allocation",
+        _api_tool_call("get_capital_allocation", args))
+
+
+# _resolve_ticker_to_cik_via_sec (the stdlib-only ticker->CIK resolver that
+# tool_get_13f_holdings below shares with get_sec_filings) lived here until the
+# 2026-09-12 cut; it is now defined in oxford_ledge_mcp/sec_tools.py and bound
+# in this module by the re-export import beside get_sec_filings above.
+
+
+# The route's published bounds for `max_holdings` (server_asgi.py
+# fund_holdings: Query(50, ge=1, le=500)); the wheel clamps to them BEFORE
+# the request so an out-of-range value never becomes a 422 (b03-ownership-18).
+_13F_MAX_HOLDINGS_MIN = 1
+_13F_MAX_HOLDINGS_CAP = 500
+
+#: The ticker arm of the get_13f_holdings identifier fork (f2-ownership-6):
+#: ASCII letters with at most one `.` or `-` class suffix -- the shapes SEC's
+#: company map spells (BRK-B) and callers write (BRK.B); the resolver tries
+#: the other separator itself. `str.isalpha()` admitted any Unicode letter
+#: and refused every class share.
+_13F_TICKER_RE = re.compile(r"[A-Z]{1,10}(?:[.-][A-Z]{1,4})?")
+_13F_CIK_RE = re.compile(r"[0-9]{1,10}")
 
 
 # NO min_tier (OWNER ruling 2026-09-05, external field-test F9): the whole
@@ -1596,19 +1112,99 @@ def tool_get_capital_allocation(args):
 # tests/test_mcp_package_tier_parity_contract.py in the main repo.
 @mcp_tool(name="get_13f_holdings", cache=FUNDAMENTAL, heavy=True)
 def tool_get_13f_holdings(args):
-    fund = args["fund"].strip()
+    # b03-ownership-18 (3.4.0 vet): `args["fund"]` was a KeyError that
+    # reached the wire as INTERNAL_ERROR "'fund'" on the base install's
+    # built-in transport (which validates nothing). An absent argument is
+    # an argument error.
+    fund = str(args.get("fund") or "").strip()
+    if not fund:
+        raise ToolError(
+            ToolError.INVALID_PARAMS,
+            "fund is required: a numeric CIK (e.g. 1067983 for Berkshire "
+            "Hathaway) or a ticker (e.g. BLK, BRK-B).")
+    # 2026-09-05 field-report-#2 F6-validation: port of the in-tree SEC-F1
+    # guard (mcp_server.py _tool_get_13f_holdings) -- the pip twin took the
+    # value unvalidated, so "BRK.B" rode to the API and came back as an
+    # SEC-availability-shaped error instead of an argument error. The
+    # ticker->CIK resolve uses SEC's public company_tickers.json (stdlib-only
+    # -- this package cannot import the in-tree cik_map). Severity note: the
+    # value lands as a urlencoded query param on OL's own API (not an EDGAR
+    # URL path), so this is error-quality parity, not SSRF.
+    #
+    # f2-ownership-6 (2026-09-13 deep audit, FIX-BEFORE-PUBLISH): the fork
+    # was `fund.isalpha()`, which refused BRK-B / BRK.B BEFORE the dot/dash-
+    # aware resolver it hands off to (sec_tools._resolve_ticker_to_cik_via_
+    # sec, written for exactly those forms) -- and SEC's map has no bare
+    # "BRK" (BRK-A / BRK-B only), so the schema's own example could not
+    # resolve on either server. The ticker arm is now the class-share shape
+    # (ASCII letters, one optional `.`/`-` class suffix); the CIK arm is
+    # 1-10 ASCII digits (DELTA re-vet CISO-4 / CHAOS-8: `isdigit()` admitted
+    # Arabic-Indic digits and a 30-digit "CIK", each a guaranteed-404 EDGAR
+    # request); anything else is the argument error. The in-tree twin runs
+    # the byte-alike _13F_TICKER_RE fork (mcp_server.py, 2026-09-13);
+    # tests/test_mcp_behavioral_parity_contract.py pins both twins' ALLOW
+    # arm for BRK-B / BRK.B and the deny arm for a value neither shape
+    # admits.
+    fund_up = fund.upper()
+    if _13F_TICKER_RE.fullmatch(fund_up):
+        resolved = _resolve_ticker_to_cik_via_sec(fund_up)
+        if not resolved:
+            raise ToolError(
+                ToolError.INVALID_PARAMS,
+                f"Could not resolve ticker '{fund}' to a CIK number via SEC's "
+                f"company map (class shares are listed there as BRK-B, not "
+                f"BRK). Try providing the CIK directly (e.g. 1067983 for "
+                f"Berkshire Hathaway).")
+        fund = resolved
+    elif not _13F_CIK_RE.fullmatch(fund):
+        raise ToolError(
+            ToolError.INVALID_PARAMS,
+            f"Invalid fund identifier '{fund}': provide a numeric CIK "
+            f"(e.g. 1067983) or a ticker -- letters with at most one "
+            f"class suffix (BLK, BRK-B or BRK.B).")
     # 2026-08-10 field test #2: the route signature is cik-only
     # (server_asgi fund_holdings(cik=Query(""))); sending fund= fell through
     # to 400 "No CIK provided" on every call. The input schema now says CIK.
     params = {"cik": fund}
-    if args.get("max_holdings"):
-        params["max_holdings"] = str(int(args["max_holdings"]))
+    # b03-ownership-18: the route bounds are Query(50, ge=1, le=500)
+    # (server_asgi.py fund_holdings); the in-tree twin clamps with
+    # _wave1_cap(value, 50, 500). The wheel forwarded the raw value, so 1000
+    # came back as a pydantic 422 dressed as DATA_UNAVAILABLE and 0 was
+    # silently dropped. Clamp to [1, 500] here, explicitly -- the handler
+    # guard; a non-numeric value still raises (ValueError -> INVALID_PARAMS
+    # at the dispatcher), because "abc" is an argument error, not 50.
+    if args.get("max_holdings") is not None and args.get("max_holdings") != "":
+        params["max_holdings"] = str(
+            max(_13F_MAX_HOLDINGS_MIN, min(_13F_MAX_HOLDINGS_CAP, int(args["max_holdings"]))))
+    data = _api_get("/api/fund-holdings", params)
+    # b03-ownership-17: both upstream empty branches (data/edgar_13f.py --
+    # "no 13F-HR found" and "the infotable parse returned nothing") ship
+    # `holdings: [], totalValue: 0` with no note, so a parse failure read as
+    # "this fund reports $0 of holdings" and was cached for an hour. The two
+    # are told apart by `filingDate`: the not-a-filer branch has none. A
+    # string `error` beside the empty list is the package's RETURNED error
+    # vocabulary (errors.non_object_response), and the seam never caches a
+    # dict that carries one.
+    if (isinstance(data, dict) and not data.get("holdings")
+            and not data.get("error")):
+        filed = str(data.get("filingDate") or "").strip()
+        if not filed:
+            data["error"] = (
+                f"no 13F-HR filed by CIK {fund}: the SEC submissions index "
+                f"lists no 13F-HR for this filer -- holdings is empty and "
+                f"totalValue 0 is a placeholder, not a reported portfolio "
+                f"value.")
+        else:
+            data["error"] = (
+                f"the latest 13F-HR (filed {filed}) could not be parsed: the "
+                f"information table returned no rows -- holdings is empty "
+                f"and totalValue 0 is a placeholder, not a reported "
+                f"portfolio value.")
     # Emit boundary (2026-08-10 allowlist inversion): fail-CLOSED per-tool
     # allowlist first (`cusip` is deliberately absent from it -- the FactSet/
     # CGS carve-out that removed the bond tools in 3.1.0), carve-out strip
     # retained as defense-in-depth.
-    return _strip_carveout_ids(filter_to_allowlist(
-        "get_13f_holdings", _api_get("/api/fund-holdings", params)))
+    return _strip_carveout_ids(filter_to_allowlist("get_13f_holdings", data))
 
 
 @mcp_tool(name="get_value_investing_fact", cache=STATIC)
@@ -1676,11 +1272,114 @@ def _unknown_tool_text(name: str) -> str:
 
 # ── Concurrency-limited tool execution ───────────────────────────────────────
 
+_JSON_TYPE_CHECKS = {
+    "string": lambda v: isinstance(v, str),
+    "integer": lambda v: (isinstance(v, int) and not isinstance(v, bool))
+    or (isinstance(v, float) and v.is_integer()),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "boolean": lambda v: isinstance(v, bool),
+    "array": lambda v: isinstance(v, list),
+    "object": lambda v: isinstance(v, dict),
+    "null": lambda v: v is None,
+}
+
+
+def _validate_args_against_schema(tool_name, args):
+    """critic-1 (3.4.0 vet), the input-validation half: the mcp SDK runs
+    jsonschema over the advertised inputSchema BEFORE `call_tool` and answers
+    "Input validation error: 'series' is a required property" (isError), so
+    a missing required key could never reach a handler on that transport --
+    while the built-in loop, the transport a bare install runs, validated
+    nothing and a missing key surfaced as a raw KeyError rendered
+    INTERNAL_ERROR "'series'" (b03-18, b05-9, b06-3). The four keywords these
+    schemas use -- `required`, `type`, `enum`, `maxItems` -- are checked here
+    with the SDK's own sentences, from the SAME `TOOLS` list, so the two
+    transports refuse the same call the same way. Raises INVALID_PARAMS."""
+    schema = next((t.get("inputSchema") or {} for t in TOOLS if t.get("name") == tool_name), None)
+    if not isinstance(schema, dict):
+        return
+    for key in schema.get("required") or ():
+        if key not in args:
+            raise ToolError(ToolError.INVALID_PARAMS,
+                            f"Input validation error: '{key}' is a required property")
+    for pname, spec in (schema.get("properties") or {}).items():
+        if pname not in args or not isinstance(spec, dict):
+            continue
+        v = args[pname]
+        types = spec.get("type")
+        types = [types] if isinstance(types, str) else (types or [])
+        # The property NAME leads each sentence (merge of the 3.4.0 fix wave,
+        # 2026-09-12): the SDK's jsonschema text ("None is not of type
+        # 'string'") keeps the failing path in `json_path`, not in the message,
+        # and four handler-level refusals (b03-3, b03-18, b06-3) were written
+        # to say WHICH argument -- so the seam says it too. The SDK sentence
+        # stays a substring, which is what the transports-agree contract pins.
+        if types and not any(_JSON_TYPE_CHECKS.get(t, lambda _v: True)(v) for t in types):
+            shown = "', '".join(types)
+            raise ToolError(ToolError.INVALID_PARAMS,
+                            f"Input validation error: `{pname}`: {v!r} is not of type '{shown}'")
+        # Bounds (re-vet 2026-09-12, CISO-D1 / CHAOS NEW-1 / COUNSEL W-2): the
+        # SDK transport's jsonschema REFUSES an out-of-range number before
+        # call_tool ("5000 is greater than the maximum of 100") while this
+        # loop used to CLAMP it and serve -- the same call answered two ways
+        # depending on which extra was installed, and the hosted seam refuses
+        # too (mcp_param_contract: "does not silently clamp"). One semantic on
+        # every path: refuse, with the SDK's sentence and the property named.
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v:
+            mx, mn = spec.get("maximum"), spec.get("minimum")
+            if isinstance(mx, (int, float)) and not isinstance(mx, bool) and v > mx:
+                raise ToolError(ToolError.INVALID_PARAMS,
+                                f"Input validation error: `{pname}`: {v!r} is greater than the maximum of {mx!r}")
+            if isinstance(mn, (int, float)) and not isinstance(mn, bool) and v < mn:
+                raise ToolError(ToolError.INVALID_PARAMS,
+                                f"Input validation error: `{pname}`: {v!r} is less than the minimum of {mn!r}")
+        if isinstance(spec.get("enum"), list) and v not in spec["enum"]:
+            raise ToolError(ToolError.INVALID_PARAMS,
+                            f"Input validation error: `{pname}`: {v!r} is not one of {spec['enum']!r}")
+        if isinstance(spec.get("maxItems"), int) and isinstance(v, list) \
+                and len(v) > spec["maxItems"]:
+            raise ToolError(ToolError.INVALID_PARAMS,
+                            f"Input validation error: `{pname}`: {v!r} is too long")
+
+
+def _carries_error(result):
+    """K-3 (ii): a dict result whose `error` says something is an HONEST
+    answer to serve and a WRONG thing to cache -- 26 of 29 tools replayed a
+    200-with-`error` envelope (PostgreSQL unavailable, SEC unreachable, "No
+    data for ZZZZ") for 3600s, so one transient failure became an hour of
+    the same refusal. Same predicate `mcp_provenance.attach_provenance` uses."""
+    return isinstance(result, dict) and bool(result.get("error"))
+
+
 def _execute_tool_with_limits(tool_name, args):
-    """Execute a tool call with caching, concurrency limits, and structured errors."""
+    """Execute a tool call with caching, concurrency limits, and structured errors.
+
+    The seam properties (3.4.0 publish vet, in dispatch order): arguments are
+    a JSON object (K-4), validated against the advertised inputSchema the way
+    the mcp SDK does (critic-1) -- required, type, enum, maxItems AND the
+    minimum / maximum bounds, refused with the SDK's own sentences so the
+    two transports answer an out-of-range number the same way (re-vet
+    CISO-D1 / NEW-1; the clamp-and-note the wave first shipped is gone);
+    the handler runs; a non-object result is refused (K-3 i); the emit allowlist
+    is applied for EVERY tool and a tool with no entry is refused (critic-6,
+    the 3.2.0 K-2 runtime fail-closed property, restored); the four
+    standalone tools get their `_meta` (CV-2); the disclosure literals append
+    last (L-5); a result carrying
+    `error` is served but never cached (K-3 ii). Every RAISED error bypasses
+    the cache write by construction.
+    """
     handler = TOOL_DISPATCH.get(tool_name)
     if not handler:
         return None
+    if not isinstance(args, dict):
+        # K-4: a non-object `arguments` reached cache_key and came back as
+        # INTERNAL_ERROR with raw Python text ("'list' object has no
+        # attribute 'get'"). It is the caller's request that is malformed.
+        raise ToolError(
+            ToolError.INVALID_PARAMS,
+            "tools/call `arguments` must be a JSON object, got a JSON "
+            f"{json_type_name(args)}.")
+    _validate_args_against_schema(tool_name, args)
 
     cached = _cache_get(tool_name, args)
     if cached is not None:
@@ -1707,7 +1406,38 @@ def _execute_tool_with_limits(tool_name, args):
             heavy_acquired = True
 
         result = handler(args)
-        _cache_set(tool_name, args, result)
+        # K-3 (i): a passthrough handler hands back whatever the upstream
+        # decoded; a bare `[]` walked the key filter unchanged, took no
+        # disclosure, was cached and served as isError:false on 23 tools.
+        # The two reshaping tools return a DICT envelope for that body and
+        # never reach this raise.
+        if not isinstance(result, dict):
+            raise non_object_tool_error(tool_name, result)
+        # CISO F5 (2026-09-12): the emit allowlist is applied HERE, for every
+        # tool, rather than by each handler remembering to (9 of 29 did not).
+        # Idempotent over the handlers that call it themselves. UNCONDITIONAL
+        # (critic-6, 3.4.0 vet): a tool with NO entry raises
+        # EmitAllowlistMissing and is refused as a packaging defect -- the
+        # runtime fail-closed property the 3.2.0 vet proved by probe and the
+        # allowlist module promises, restored. The CI gate
+        # (tests/test_mcp_wheel_emit_boundary_contract.py) reds a missing
+        # entry first; this is for the day CI is not in the loop. Before
+        # _cache_set, so the cache holds the projection that ships.
+        result = filter_to_allowlist(tool_name, result)
+        # CV-2 (2026-09-12): the four standalone tools cross no hosted seam
+        # and carried no `_meta`. Attached iff the result has none, after the
+        # filter (envelope vocabulary either way), before the disclosure.
+        if "_meta" not in result:
+            meta = standalone_meta(tool_name, args)
+            if meta:
+                result["_meta"] = meta
+        # L-5 Layer 3 (2026-09-12): attribution + not-advice attach at the ONE
+        # seam (15/29 tools shipped bare); a blank counts as absent (K-8),
+        # and BEFORE _cache_set.
+        result = _attach_disclosure(result)
+        # K-3 (ii): served, honestly; never replayed from the cache.
+        if not _carries_error(result):
+            _cache_set(tool_name, args, result)
         return result
     except ToolError:
         raise
@@ -1740,6 +1470,44 @@ def _execute_tool_with_limits(tool_name, args):
         _mcp_semaphore.release()
 
 
+# ── The wire: one serializer, one dispatch, two transports ───────────────────
+# The serializer (K-5: NaN/Infinity -> null, allow_nan=False), the two
+# JSON-RPC result shapes and the SDK-transport error live in wire.py (cut in
+# the same wave, for the file-size budget); re-exported here by name.
+from oxford_ledge_mcp.wire import (  # noqa: E402,F401  (re-exports)
+    _TransportToolError,
+    _coerce_for_wire,
+    _rpc_error,
+    _tool_content,
+    _wire_dumps,
+    _wire_fallback,
+)
+
+
+def _dispatch_to_content(tool_name, tool_args):
+    """Run one tools/call and return (content_text, is_error).
+
+    critic-1 (3.4.0 vet): the built-in loop said isError:true for every
+    ToolError / INTERNAL_ERROR / unknown tool while the mcp-SDK `call_tool`
+    returned the same text as a plain content list, which the SDK marks
+    isError:false -- so on the `[mcp]` install every wheel error read as a
+    success. Both transports now render THIS pair.
+    """
+    fn = TOOL_DISPATCH.get(tool_name)
+    if not fn:
+        return _unknown_tool_text(tool_name), True
+    try:
+        result = _execute_tool_with_limits(tool_name, tool_args)
+        return _wire_dumps(result, indent=2), False
+    except ToolError as e:
+        _log(f"Tool error ({tool_name}): [{e.code}] {e.message}")
+        return _wire_dumps(e.to_dict()), True
+    except Exception as e:
+        _log(f"Tool error ({tool_name}): {traceback.format_exc()}")
+        error_payload = {"error": {"code": "INTERNAL_ERROR", "message": str(e)}}
+        return _wire_dumps(error_payload), True
+
+
 # ── JSON-RPC MCP Protocol ────────────────────────────────────────────────────
 
 # Server-level disclosure, sent ONCE at initialize (L-5 CYCLE, OWNER-
@@ -1758,6 +1526,19 @@ SERVER_INSTRUCTIONS = (
     "https://www.oxfordledge.com/terms")
 
 def handle_request(req):
+    """One JSON-RPC request -> one response dict (None for a notification).
+
+    K-4 (3.4.0 publish vet): a non-object request, `params: null` / a
+    non-object `params`, or non-object `arguments` used to raise
+    AttributeError OUT of this function; the stdio loop logged it and wrote
+    NO response, so a conformant client waited forever. They are JSON-RPC
+    errors now (-32600 Invalid Request / -32602 Invalid params), which is
+    what the mcp SDK's pydantic parsing answers for the same shapes.
+    """
+    if not isinstance(req, dict):
+        return _rpc_error(None, -32600,
+                          "Invalid Request: expected a JSON-RPC request object, "
+                          f"got a JSON {json_type_name(req)}")
     method = req.get("method", "")
     req_id = req.get("id")
 
@@ -1783,43 +1564,35 @@ def handle_request(req):
         return {"jsonrpc": "2.0", "id": req_id, "result": {}}
 
     if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": TOOLS}}
+        # K-2 (3.4.0 publish vet): the derived `[Tier: ...]` prefix was
+        # applied on the SDK `list_tools` path only, and a bare
+        # `pip install oxford-ledge-mcp` (`dependencies = []`) runs THIS
+        # loop -- so the transport the base install uses listed untagged
+        # descriptions. Same helper, same derivation, both transports;
+        # tests/test_mcp_transports_agree_contract.py drives both listings.
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": [
+            dict(t, description=_with_tier_tag(t["name"], t["description"]))
+            for t in TOOLS]}}
 
     if method == "tools/call":
-        tool_name = req.get("params", {}).get("name", "")
-        tool_args = req.get("params", {}).get("arguments", {})
-        fn = TOOL_DISPATCH.get(tool_name)
-        if not fn:
-            return {
-                "jsonrpc": "2.0", "id": req_id,
-                "result": {
-                    "content": [{"type": "text", "text": _unknown_tool_text(tool_name)}],
-                    "isError": True,
-                },
-            }
-        try:
-            result = _execute_tool_with_limits(tool_name, tool_args)
-            text = json.dumps(result, indent=2, default=str)
-            return {
-                "jsonrpc": "2.0", "id": req_id,
-                "result": {"content": [{"type": "text", "text": text}], "isError": False},
-            }
-        except ToolError as e:
-            _log(f"Tool error ({tool_name}): [{e.code}] {e.message}")
-            error_json = json.dumps(e.to_dict(), default=str)
-            return {
-                "jsonrpc": "2.0", "id": req_id,
-                "result": {"content": [{"type": "text", "text": error_json}], "isError": True},
-            }
-        except Exception as e:
-            _log(f"Tool error ({tool_name}): {traceback.format_exc()}")
-            error_payload = {"error": {"code": "INTERNAL_ERROR", "message": str(e)}}
-            return {
-                "jsonrpc": "2.0", "id": req_id,
-                "result": {"content": [{"type": "text", "text": json.dumps(error_payload)}], "isError": True},
-            }
+        params = req.get("params")
+        if not isinstance(params, dict):
+            return _rpc_error(req_id, -32602,
+                              "Invalid params: tools/call `params` must be an object "
+                              f"with `name` and `arguments`, got a JSON {json_type_name(params)}")
+        tool_name = params.get("name")
+        tool_args = params.get("arguments")
+        if tool_args is None:
+            tool_args = {}
+        if not isinstance(tool_name, str) or not isinstance(tool_args, dict):
+            return _rpc_error(req_id, -32602,
+                              "Invalid params: `name` must be a string and `arguments` "
+                              f"an object, got name={json_type_name(tool_name)} "
+                              f"arguments={json_type_name(tool_args)}")
+        text, is_error = _dispatch_to_content(tool_name, tool_args)
+        return {"jsonrpc": "2.0", "id": req_id, "result": _tool_content(text, is_error)}
 
-    return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Unknown method: {method}"}}
+    return _rpc_error(req_id, -32601, f"Unknown method: {method}")
 
 
 def main():
@@ -1830,7 +1603,7 @@ def main():
     if _API_URL:
         _log(f"  API endpoint: {_API_URL}")
     else:
-        _log("  Tip: Set OXFORD_LEDGE_URL for all 18 tools. Standalone mode serves only the keyless public-API tools (2 SEC EDGAR; FRED with FRED_API_KEY).")
+        _log("  Tip: Set OXFORD_LEDGE_URL for all 29 tools. Standalone mode serves only the keyless public-API tools (2 SEC EDGAR; FRED with FRED_API_KEY).")
 
     # Try to use the mcp package if available
     try:
@@ -1852,26 +1625,35 @@ def main():
 
         @server.list_tools()
         async def list_tools():
+            # TIER, DERIVED. External field test 2026-09-08: "16 of 18
+            # descriptions say [Requires API mode]; only 2 actually 402. A
+            # model can't predict which call will fail, so it either avoids
+            # all 16 or burns calls discovering the boundary."
+            #
+            # The tag is read from REGISTRY[name]["min_tier"] -- the value the
+            # @mcp_tool decorator recorded and the same one the API-mode
+            # dispatcher enforces -- so the description cannot drift from the
+            # behaviour. Hand-writing the tier into 18 descriptions would have
+            # rebuilt the prose-vs-enforcement split this exists to close.
             return [
-                Tool(name=t["name"], description=t["description"], inputSchema=t["inputSchema"])
+                Tool(name=t["name"],
+                     description=_with_tier_tag(t["name"], t["description"]),
+                     inputSchema=t["inputSchema"])
                 for t in TOOLS
             ]
 
         @server.call_tool()
         async def call_tool(name: str, arguments: dict):
-            if name not in TOOL_DISPATCH:
-                return [TextContent(type="text", text=_unknown_tool_text(name))]
-            try:
-                result = _execute_tool_with_limits(name, arguments)
-                text = json.dumps(result, indent=2, default=str)
-                return [TextContent(type="text", text=text)]
-            except ToolError as e:
-                _log(f"Tool error ({name}): [{e.code}] {e.message}")
-                return [TextContent(type="text", text=json.dumps(e.to_dict(), default=str))]
-            except Exception as e:
-                _log(f"Tool error ({name}): {traceback.format_exc()}")
-                error_payload = {"error": {"code": "INTERNAL_ERROR", "message": str(e)}}
-                return [TextContent(type="text", text=json.dumps(error_payload))]
+            # critic-1 (3.4.0 publish vet): this returned the error JSON as
+            # a plain content list for the ToolError / INTERNAL_ERROR /
+            # unknown-tool arms, and the SDK marks a returned list as
+            # SUCCESS -- every wheel error rode this transport with
+            # isError:false while the built-in loop said true. One dispatch
+            # for both transports; an error arm RAISES so the SDK flags it.
+            text, is_error = _dispatch_to_content(name, arguments)
+            if is_error:
+                raise _TransportToolError(text)
+            return [TextContent(type="text", text=text)]
 
         async def run():
             async with stdio_server() as (read_stream, write_stream):
@@ -1896,6 +1678,7 @@ def main():
         _log("mcp package not installed -- using built-in JSON-RPC over stdio")
 
         while True:
+            request = None
             try:
                 line = sys.stdin.readline()
                 if not line:
@@ -1916,20 +1699,28 @@ def main():
 
                 response = handle_request(request)
                 if response is not None:
-                    out = json.dumps(response, default=str)
+                    out = _wire_dumps(response)
                     sys.stdout.write(out + "\n")
                     sys.stdout.flush()
 
             except json.JSONDecodeError as e:
                 _log(f"JSON parse error: {e}")
-                err = {"jsonrpc": "2.0", "error": {"code": -32700, "message": f"Parse error: {e}"}}
+                err = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": f"Parse error: {e}"}}
                 sys.stdout.write(json.dumps(err) + "\n")
                 sys.stdout.flush()
             except KeyboardInterrupt:
                 break
             except Exception as e:
+                # K-4: never leave a request unanswered. handle_request no
+                # longer raises on a malformed request, so this arm is the
+                # last resort -- and it still writes a JSON-RPC error rather
+                # than logging and going quiet on the client.
                 _log(f"Unexpected error: {e}")
                 traceback.print_exc(file=sys.stderr)
+                rid = request.get("id") if isinstance(request, dict) else None
+                sys.stdout.write(json.dumps(
+                    _rpc_error(rid, -32603, f"Internal error: {type(e).__name__}")) + "\n")
+                sys.stdout.flush()
 
     _log("Oxford Ledge MCP server stopped.")
 

@@ -5,8 +5,8 @@ Usage:   oxford-ledge-mcp (runs as stdio MCP server)
 
 Two modes:
   1. Standalone: only the keyless public-API tools (2 SEC EDGAR; FRED with a
-     free FRED_API_KEY). The other 9 tools raise API_REQUIRED.
-  2. API mode:   All 13 tools via an Oxford Ledge instance
+     free FRED_API_KEY). The other 25 tools need OXFORD_LEDGE_URL.
+  2. API mode:   All 29 tools via an Oxford Ledge instance
      Set OXFORD_LEDGE_URL=https://www.oxfordledge.com
 
 Claude Desktop config (claude_desktop_config.json):
@@ -19,4 +19,6 @@ Claude Desktop config (claude_desktop_config.json):
 }
 """
 
-__version__ = "3.3.0"  # keep in sync with pyproject.toml [project].version
+from __future__ import annotations
+
+__version__ = "3.4.0"  # keep in sync with pyproject.toml [project].version

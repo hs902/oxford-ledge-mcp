@@ -110,6 +110,126 @@ Include in your bug report:
    (`OXFORD_LEDGE_URL` set or not).
 5. `pip show oxford-ledge-mcp | grep Version` so we know which release.
 
+## 3.4.0 — four wire changes (the full 29-tool publish vet)
+
+**Tool names and config are unchanged; four argument schemas tighten.** Four
+payloads change shape or key names; each is a case where the old wire said
+something that was not true, so a consumer that keyed on the old name was
+keying on a false label. Everything else in 3.4.0 is additive (new keys, new
+`_meta`, new notes on empty results) or an error-path correction.
+
+### Four count arguments are `integer`, not `number` (schema tightening)
+
+`get_13f_holdings.max_holdings`, `ol_bdc_common_borrowers.min_holders`,
+`ol_bdc_common_borrowers.limit` and `ol_bdc_mark_changes.limit` were declared
+`number`, so `2.9` conformed, was truncated by the handler, and `_meta.
+params_accepted` echoed the fraction as accepted (2026-09-13 DELTA re-vet
+CHAOS-4). They are `integer` now on both the wheel and the hosted catalog:
+`2.9` is refused as INVALID_PARAMS naming the argument; `25`, `25.0` and the
+integral string `"25"` still pass. A client that sent a fraction was never
+getting what it asked for.
+
+### `get_fundamentals`: `TotalDebt` -> `LongTermDebt` (key rename)
+
+The series under `data.TotalDebt` was always `us-gaap:LongTermDebt` with an
+unlabelled `LongTermDebtNoncurrent` fallback -- commercial paper, short-term
+borrowings and, in fallback years, the current portion were never in it. The
+key now says what the value is: `data.LongTermDebt`. There is no `TotalDebt`
+key any more and no total-debt series (building one is a separate, later
+feature). Also new and additive: a top-level `concepts` that mirrors `data`
+-- for EVERY served label a list `[{period, concept}]` index-aligned with
+`data[label]` (plus a `conceptsNote`) -- and `basis.attribution`. A consumer reading `data.TotalDebt` must
+read `data.LongTermDebt` and must stop calling it total debt.
+
+### `get_debt_maturities` / `get_capital_allocation`: the hosted shapes
+
+Both tools are now name-proxies of the hosted EDGAR-only tools instead of
+proxies of two REST routes. The wire changes from the route shapes to the
+shapes the descriptions always advertised:
+
+- `get_debt_maturities`: was `{ticker, totalDebt, schedule:[{year, amount}],
+  source, confidence}` with `amount` in whole DOLLARS and `source` possibly
+  `finnhub-estimate` (a modelled 15/15/12/12/46% ladder from vendor debt
+  totals). Now `{ticker, maturities:[{year, amount}], thereafter,
+  confidence, confidence_score, source, validation}` with amounts in
+  MILLIONS of USD, `source` = `table` | `regex` | null (parser method), and a
+  `validation` block cross-checking the ladder against the balance sheet. No
+  vendor branch exists. A consumer that multiplied nothing must now multiply
+  by 1e6 to get dollars; a consumer that read `schedule` must read
+  `maturities` + `thereafter`.
+- `get_capital_allocation`: was `{ticker, layers:[{layer, amount,
+  percentage}]}` (a Finnhub-fed capital-STRUCTURE snapshot, and empty with an
+  `error` on every real call). Now `{ticker, capitalAllocation:{years,
+  dividends, netBuybacks, netDebtChange, acquisitions, sharesOut, isDilutive,
+  summary}}` -- parallel arrays newest-first, whole USD, the NET series being
+  Oxford Ledge derivations (`_meta.basis: hybrid`). Nothing in the old shape
+  survives.
+
+Both remain Plus-tier. The refusal is still `AUTH_REQUIRED`, but its sentence
+changed (deep audit 2026-09-13): keyless, it names the tier, says the client is
+anonymous and tells the operator where `OXFORD_LEDGE_API_KEY` is set; with a
+valid key on a plan below Plus it says THE KEY IS VALID and the plan is what
+is missing (it used to read the code word `tier_required` followed by the
+"do not paste a key" warning). A consumer that string-matched
+`tier_required` in the message must key on the `AUTH_REQUIRED` code instead.
+
+### `get_corporate_events`: `events[].id` removed
+
+The corporate_events SERIAL row id no longer ships (the same row-id class
+stripped from the insider tools). Nothing in the wheel or the description
+ever consumed it; key on `sourceUrl` + `eventDate` + `eventType` instead.
+
+### `get_insider_trades`: `dateBasis` now names the date `date` carries
+
+`date` is unchanged (the filing date when the filing carries one). `dateBasis`
+used to say `transaction` whenever a transaction date existed -- which was
+every normal row, while `date` was the filing date -- so the label contradicted
+the value on every row. It now says `filing` when `date` is `filingDate` and
+`transaction` only when no filing date exists. A consumer that branched on
+`dateBasis == "transaction"` to mean "`date` is the trade date" was wrong
+before and is now told so; read `transactionDate` for the trade date. Rows
+also gain `securityTitle` and `isDerivative` (additive), and `pricePerShare`
+is no longer rounded to cents.
+
+### Additive changes from the 2026-09-13 deep audit (no key renamed)
+
+Each of these is a case where the wheel served fewer rows, a blank, or a
+label it could not stand behind; none renames or removes a key.
+
+- `get_insider_trades` serves the route's full 20-row window (it served
+  the newest 15 of the 20 while the description said 20). `completeness`
+  keeps its meaning: `complete` is null when the window came back full.
+- `get_holders` / `get_insider_trades`: `_meta.derived_fields` now names
+  the WHEEL's key paths (`trades[].value`, `trades[].position`,
+  `trades[].transTypeLabel`, `trades[].is_open_market`; `vintages`,
+  `rankingBasis`) instead of the route's (`transactions[].totalValue`,
+  `holders[].change_type` ... -- keys that never existed on the wheel's
+  wire). `source`, `basis`, `terms_url` are the route's, unchanged.
+- `get_fundamentals`: `StockholdersEquity` is served for a filer that
+  publishes non-controlling-interest concepts when its NCI is demonstrably
+  zero at the period end (JNJ, whose 10-K equity is tagged ONLY on the
+  consolidated rung, was served no equity at all); `equityNote` and, when
+  a period is refused, `{value: null, withheld: "nci_consolidated"}` +
+  `equityWithheldNci` are new. `coverage[label].contiguous` is new.
+  A >= 5x step across a tagging hole in EPS / DilutedShares (DAC's
+  1-for-14 reverse split inside its untagged 2012-2016) withholds the
+  older side as `{value: null, withheld: "basis_unverified"}`, with
+  `basis.gapBreaks` + `basis.gapNote` (and `basis.basisConsistent` false).
+  The refusal for a US-GAAP filer whose facts ride Form 6-K in CAD (CNI)
+  names `annualFormsSeen` / `unitsSeen`.
+- `get_13f_holdings`: `fund` accepts a class-share ticker (`BRK-B`,
+  `BRK.B`) and resolves it via SEC's company map; it used to be rejected
+  as INVALID_PARAMS before the resolver ran. The all-letters and numeric
+  forms are unchanged.
+- `get_fred_data`: a BLS/BEA series whose TITLE merely contains a licensor's
+  word (`MIUR`, "Unemployment Rate in Michigan"; a Russell County or Moody
+  County series) is served; it was refused as third-party-licensed. The
+  hard-deny roster (UMCSENT, MICH, the ICE BofA OAS set, VIXCLS, SP500,
+  DJIA, NASDAQCOM) is unchanged.
+- The package imports on Python 3.9 again (a PEP 604 union evaluated at
+  definition time in `fred_tools.py` broke the advertised `>=3.9` floor on
+  the unreleased tree; the published 3.3.0 was unaffected).
+
 ## 2.0.1 — yfinance removed (Y1 sprint, 2026-04-24)
 
 **Breaking change affecting standalone-mode users.** If you were
@@ -212,24 +332,28 @@ depends on a vendor feed does not belong in a redistributable package.
 ### What replaces them
 
 The intrinsic-value / peer / screen capability is being rebuilt from
-**SEC EDGAR company-facts XBRL only** (`ol_intrinsic_value`,
-`ol_peer_fundamentals`, `ol_fundamentals_screen`) — DCF / EPV / Graham
-per-share, peer fundamentals, and a bounded fundamentals screen, with
-**no price leg** (fetch a price from your own source to compute upside).
-These currently ship in the in-tree server; they arrive in this pip
-package in a later release once the redistribution vet completes.
+**SEC EDGAR company-facts XBRL only** — DCF / EPV / Graham per-share, peer
+fundamentals, and a bounded fundamentals screen, with **no price leg** (fetch
+a price from your own source to compute upside). Those tools are hosted-only
+today; they arrive in this pip package only once the redistribution vet
+clears them.
 
 ### If you relied on the removed tools
 
 For raw price history or a vendor company profile, query your Oxford
 Ledge instance's REST API directly. For fundamentals + valuation, prefer
-the SEC-XBRL tools (`get_fundamentals`, and the `ol_*` valuation tools
-when they land here).
+the SEC-XBRL tools (`get_fundamentals`, and the hosted valuation tools
+if and when they land here).
 
 ---
 
 ## Version history
 
+- **3.4.0** (unreleased) — the full 29-tool publish vet: four wire changes
+  (`TotalDebt` -> `LongTermDebt`; the two Plus tools serve the hosted EDGAR
+  shapes; `events[].id` removed; `dateBasis` truthful), `_meta` on every
+  response, one dispatcher seam that refuses non-object bodies and never
+  caches an error envelope. See above.
 - **3.1.0** (2026-07-21) — third-party-IP compliance sweep (CHAOS+DATA_CZAR+
   COUNSEL vetted): `search_bonds` + `get_bond_data` removed (bond CUSIPs are
   FactSet-licensed IP) and `get_short_interest` removed (advertised stub,

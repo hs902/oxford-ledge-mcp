@@ -5,6 +5,9 @@
 whole failure mode; the console script `oxford-ledge-mcp` remains the
 documented entry point.
 """
+
+from __future__ import annotations
+
 from oxford_ledge_mcp.server import main
 
 if __name__ == "__main__":

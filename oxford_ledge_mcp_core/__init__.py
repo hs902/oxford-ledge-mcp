@@ -41,6 +41,9 @@ adapter layer only.
 - Phase 2+: dispatcher + concurrency + stdio protocol + shared tool
   schemas extracted. See MCP_FOLLOWUPS §7.3.
 """
+
+from __future__ import annotations
+
 from .errors import ToolError
 from .registry import (
     mcp_tool,
