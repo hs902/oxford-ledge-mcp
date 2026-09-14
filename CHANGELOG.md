@@ -5,6 +5,150 @@ All notable changes to `oxford-ledge-mcp` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.5.0 (2026-09-14)
+
+Measured against the WHEEL, as 3.4.0 was. Every wire change in this cut is
+ADDITIVE or a VALUE correction inside a key that already existed -- no key
+is renamed or removed -- and MIGRATING.md carries the consumer-facing list.
+Published after the CISO + COUNSEL + CHAOS delta vet of 2026-09-14
+(`docs/board/audit/2026-09-14_{CISO,COUNSEL,CHAOS}_wheel_3_5_0_delta_vet.md`
+in the monorepo), whose four fix-before-publish items landed in the bump
+commit: the hosted bond-directory twin the retired-bond pointers name no
+longer serves an identifier per row (its rows carry an identifier-free
+`key`), the shape-guard specimens below are synthetic, the borrower
+refusal sentence is store-framed, and the version attribution in this file
+is corrected where it overstated what reaches an installed 3.4.0.
+
+### Added -- from the external strategic review (2026-09-13, OWNER B5a; wave K / K4)
+
+- **`search_bdc_borrower` takes a declared `limit` / `offset` page on its
+  tranche rows.** Additive, gating nothing: a call declaring neither is
+  byte-for-byte what it was (every `holders` row, up to the host store's
+  5000-row backstop). A call declaring either slices ONLY `holders` -- every
+  aggregate, `holdingRowCount`, `priceHistory` and the relatedNorms
+  disclosure stay computed over all rows -- and carries `page` {limit,
+  offset, returned, total, hasMore} plus a `completeness` block with
+  `total_available` (the total is known, so the tool states it rather than
+  letting a default guess "at cap, total unknown"). `limit` is 1..5000 and
+  `offset` 0..5000 on the inputSchema; an out-of-range value is REFUSED
+  with the SDK's sentence on both transports, never clamped; an offset past
+  the end is an honest empty page with `total` intact. The wheel pages the
+  `/api/bdc/borrower` envelope in-process (that route takes only `q`, and a
+  forwarded limit would have been dropped silently -- the `get_13f_holdings`
+  `max_holdings` shape) so the wheel and the hosted server slice identically.
+  The ambiguous `matches[]` ladder is not paged and no tier was added.
+
+### Changed -- from the external 3.4.0 review (2026-09-13, same day as the publish)
+
+- **The key pointer opens YOUR API KEYS directly.** Every place the wheel
+  tells an operator where a key is created (the 402 refusal, the keyless tier
+  refusal, this README) now says `https://www.oxfordledge.com/?panel=api-keys`
+  -- the deep link that opens the keys panel for a signed-in user -- with the
+  in-app route beside it (press K, or click the key icon in the bottom bar).
+  It said `/?view=settings`, which is the settings view; the panel is reached
+  from the bottom bar, and the settings view only carried a row pointing at
+  it (the OWNER's own correction, 2026-09-13).
+- **`basis.basisConsistent` is `null`, not `true`, beside a populated
+  `basisAdvisory`.** The advisory tier fires on an implied-share jump with no
+  issuer refiling to corroborate it; that series is NOT withheld and NOT
+  certified single-basis, and a field literally named "consistent" answering
+  `true` on a measured 3.8x discontinuity (AAPL 2017->2018 without refiling
+  evidence) read as a certification. `null` is the same value the unexamined
+  branch already uses, for the same reason; `basisNote` says which case it
+  is. `false` stays reserved for a corroborated break that withheld cells.
+  Both channels (the wheel's own `split_basis` and the hosted gate the proxy
+  serves). The `get_fundamentals` description names the tri-state.
+- **The `DATA_KEY_SHAPES` import-time guard tests identifier VALUES, not
+  carve-out key NAMES.** A shape admits key values (a CUSIP-keyed dict has
+  a nine-character identifier as the key, never the word `cusip`), so a
+  future `[A-Z0-9]{9}` shape passed the old name test and would have
+  admitted every CUSIP-keyed container. The guard now full-matches every
+  shape against one specimen value per licensed class (CUSIP, ISIN, SEDOL,
+  LEI, FIGI, the three agency rating formats -- `LICENSED_VALUE_SPECIMENS`)
+  and still against the names. The specimens are SYNTHETIC -- shape-valid
+  and check-digit-valid, built from the reserved end of each namespace, no
+  real issuer's (COUNSEL delta vet W-2: a test value in shipped source is
+  held to the same never-leaves-through-the-wheel frame as a wire value).
+  No wire change today (a four-digit year cannot spell an identifier); the
+  false assurance the next shape would have been added under is gone.
+
+### Changed -- from the external LIVE battery of 3.4.0 (2026-09-13, wave G). The wheel
+### proxies the hosted server, so the VALUE fixes below reach an installed 3.4.0 on
+### deploy (the credit-quality headline number, the folded Form 4 rows, `summary`
+### text, the 503 pass-through); the new KEYS do not -- 3.4.0's fail-closed emit
+### allowlist strips every one of them until this cut. Corrected 2026-09-14 (COUNSEL
+### delta vet W-4a); the earlier wording ("most of this reaches an installed 3.4.0")
+### overstated it.
+
+- **`ol_bdc_credit_quality` had never returned its headline number** for an
+  XBRL-path filer (ARCC / FSK / PSEC: `determinate_fv 0.0` on every filing):
+  the non-accrual row channel existed only on the HTML path. The host now
+  joins each XBRL row to its inline-XBRL `<tr>` by context id and reads the
+  footnote marks (ARCC 1.38% of FV vs the 10-Q's own "1.4%"; FSK 3.78% vs
+  "3.8%"); `latest.coverage_state` / each trend row's `coverage_state` is
+  `none_parsed` | `partial` | `covered`, and the three sentences differ --
+  0% coverage is a parser gap, never "withheld".
+- **`search_bdc_borrower`**: `relatedNormsStale` lists prefix siblings with zero
+  current holders (discovery on key existence; the fully-exited obligor is no
+  longer invisible), and the ambiguous `matches[]` list refuses an unmeasured
+  total as `totalFv: null` + `totalFvBasis` + `totalFvRefusalReason` (the
+  3.4.0 changelog's "all six return sites share one shape" held on the detail
+  sites only).
+- **`get_insider_trades` / `ol_insider_recent_buys`**: a Form 4 and its 4/A that
+  report the same line are served ONCE (the amendment), with `isAmendment`,
+  `accessionNumber`, `supersedesAccession`, `formType` on every row; the wheel
+  passes the four through. `totalValue` is rounded to cents at ingest.
+- **`get_bdc_holdings`**: `parseQuality` (`suspect` when >= 50% of a filing's
+  rows carry no borrower identity) + `parseQualityNote`, and
+  `portfolioStructureBasis: "all_parsed_rows"` names the row set the structure
+  metrics are computed over.
+- **`ol_bdc_borrower_dispersion`**: `maturity_date_precision` +
+  `margin_suppressed_note` -- a month-precision maturity is partial, not
+  missing.
+- **`get_activist_stakes`**: `stale` is tri-state with `stale_basis` (`age` /
+  `edgar_index` / `no_refresh_evidence`; null when this call gathered no EDGAR
+  evidence); rows carry `reports_zero` (the cover page states 0 -- Vanguard's
+  2026-01-12 realignment under Release 34-39538, not a sale) and `unparsed`;
+  `summary` explains a filed zero.
+- **`get_fails_to_deliver`**: `coverage` names both edges of the window
+  (`window_end`, `days_covered`, `days_before_earliest`, `days_after_latest`),
+  `files_expected` / `files_missing` inside the loaded range, and
+  `window_postdates_coverage` is true when a whole un-loaded half-month lies
+  inside the window. (The loader itself skipped 40 of 48 SEC periods whose
+  zip member has no `.txt` extension -- fixed on the host.)
+- **`get_corporate_events`**: `coverage` {rows_stored, oldest_event_date,
+  newest_event_date} + `summary` on every payload; an unreachable store
+  answers 503 (passed through) instead of `events: []`.
+- **`ol_fdic_bank`**: `coverage` {institutions_loaded, active_loaded,
+  inactive_loaded, newest_repdte, last_loaded_at, ingest_scope} + `as_of`; the
+  not-found sentence is about the loaded store, never the world (Comerica Bank
+  filed Form 15 in Feb 2026; "The Huntington National Bank" is found by
+  "Huntington").
+- **`ol_federal_contracts`**: per-row `period_complete` / `days_elapsed` /
+  `days_in_period` + payload `as_of`; `ueis` dropped (it duplicated
+  `recipients[].uei` and pushed the payload to 98% of budget).
+- **`ol_cftc_cot`**: the description names the THREE curated markets; the
+  payload carries `markets_available`.
+
+### Operator -- the stale-install class, third occurrence
+
+- `pip install --upgrade` on a Windows box where the MCP client is running
+  fails with WinError 32 (the running `oxford-ledge-mcp.exe` holds its file)
+  and pip rolls back, leaving `site-packages/~xford_ledge_mcp-<old>.dist-info`
+  stashes. One box carried stashes for 3.1.1, 3.2.0 AND 3.3.0 on the day
+  3.4.0 shipped, and an external reviewer probed 3.3.0 answers against this
+  changelog. The handshake has carried `serverInfo.version` since 3.2.0; what
+  was missing was something that READS it. `tools/smoke_installed_mcp_wheel.py`
+  (monorepo) launches the console script a client would launch, drives
+  `initialize` + `tools/list` over stdio, and fails with the exact remedy when
+  the wire version is not the published one or residue is present. Quit the
+  client (or stop every `oxford-ledge-mcp.exe`) BEFORE upgrading; a restart
+  alone never upgrades anything.
+
+### Hosted catalog index (2026-09-13, /mcp redesign C6-a; wave M / M1) -- not in the wheel
+
+- The monorepo-only `tools_manifest.py` (excluded from the wheel on purpose) now carries `group` (one of nine), `summary` (a <=120-char index line; the description stays the contract) and `in_pip_subset` (True iff this package's `server_tools.TOOLS` advertises the name -- 24 of the 59 hosted tools at the time, 62 at the 3.5.0 cut; the wheel's other five are PIP_ONLY with no hosted row) on every entry, and `GET /api/mcp/tools.json` rows expose all three beside `requires_key` / `min_tier`; nothing on the wire this package serves changed.
+
 ## 3.4.0 (2026-09-13)
 
 Everything in this section is measured against the WHEEL -- the artifact

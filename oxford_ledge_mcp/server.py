@@ -752,6 +752,13 @@ def tool_get_insider_trades(args):
             "securityTitle": row.get("securityTitle"),
             "isDerivative": row.get("isDerivative"),
             "url": row.get("url"),
+            # G2 F10 (2026-09-13): the read-side fold's labels -- see
+            # pg_db/queries/form4_dedupe.py. NULL isAmendment means the store
+            # holds no form type, never "not amended".
+            "isAmendment": row.get("isAmendment"),
+            "accessionNumber": row.get("accessionNumber"),
+            "supersedesAccession": row.get("supersedesAccession"),
+            "formType": row.get("formType"),
         })
     fault = _route_fault(data, ticker, "trades", "insider transactions",
                          "/api/insider-activity")
@@ -832,6 +839,41 @@ def tool_get_corporate_events(args):
         "get_corporate_events", _api_get("/api/company/events", params)))
 
 
+#: search_bdc_borrower's page bound = the host store's LIMIT backstop (the
+#: hosted twin's data.bdc_borrower_pg.BORROWER_ROWS_BACKSTOP; the schema
+#: `maximum` on both catalogs is pinned equal to it by contract).
+_BORROWER_ROWS_BACKSTOP = 5000
+
+
+def _page_holder_rows(envelope, limit, offset):
+    """Wave K / K4 (2026-09-13, OWNER B5a): one declared page of the resolved
+    borrower's `holders` rows, sliced IN the wheel over the full REST
+    envelope -- /api/bdc/borrower takes only `q`, so a forwarded limit would
+    be dropped silently (the get_13f_holdings max_holdings shape), and
+    slicing here means `page.total` is exact. Twin of the hosted
+    `data.bdc_borrower_pg.page_holder_rows`, pinned output-identical over one
+    fixture by tests/test_mcp_search_bdc_borrower_paging_contract.py:
+    aggregates stay whole-borrower, `matches` is never paged, an offset past
+    the end is an honest empty page, and the tool supplies its own
+    `completeness` (total known) so no dispatch default can guess."""
+    if (not isinstance(envelope, dict) or envelope.get("error")
+            or not isinstance(envelope.get("holders"), list)):
+        return envelope  # an error envelope is served as-is, never paged
+    rows = envelope["holders"]
+    limit = max(1, min(int(limit), _BORROWER_ROWS_BACKSTOP))
+    offset = max(0, int(offset))
+    window = rows[offset:offset + limit]
+    out = dict(envelope)
+    out["holders"] = window
+    out["page"] = {"limit": limit, "offset": offset, "returned": len(window),
+                   "total": len(rows), "hasMore": (offset + len(window)) < len(rows)}
+    out["completeness"] = {"returned": len(window), "limit": limit,
+                           "total_available": len(rows),
+                           "complete": len(window) >= len(rows),
+                           "completeness_basis": "total_known", "rows_key": "holders"}
+    return out
+
+
 @mcp_tool(name="search_bdc_borrower", cache=FUNDAMENTAL)
 def tool_search_bdc_borrower(args):
     # 2026-08-10 field test #2: /api/bdc/search never existed — the live
@@ -839,7 +881,15 @@ def tool_search_bdc_borrower(args):
     # 2026-09-09 (OWNER 2a): was a bare _api_get, so this tool
     # emitted unfiltered while its twin get_bdc_list was routed
     # through after COUNSEL F-2. Same boundary, same fix.
-    return filter_to_allowlist("search_bdc_borrower", _api_get("/api/bdc/borrower", {"q": args["query"]}))
+    data = _api_get("/api/bdc/borrower", {"q": args["query"]})
+    # K4: page ONLY when the caller declared one -- an undeclared call is
+    # byte-for-byte the pre-paging wire. Bounds were refused at the seam.
+    if args.get("limit") is not None or args.get("offset") is not None:
+        data = _page_holder_rows(
+            data,
+            _BORROWER_ROWS_BACKSTOP if args.get("limit") is None else args["limit"],
+            0 if args.get("offset") is None else args["offset"])
+    return filter_to_allowlist("search_bdc_borrower", data)
 
 
 @mcp_tool(name="get_bdc_list", cache=FUNDAMENTAL)
@@ -1255,8 +1305,15 @@ _REMOVED_TOOLS = {
     "get_news": "removed in 3.0.0 (keyless-public cut — aggregated third-party headlines). Available via the hosted Oxford Ledge MCP server.",
     "search_company": "removed in 3.0.0 (keyless-public cut — blended profile source). SEC identity via `get_fundamentals` / `get_sec_filings`, or the hosted Oxford Ledge MCP server.",
     # 3.1.0 CUSIP carve-out (bond identifiers are FactSet / CUSIP Global Services IP)
-    "search_bonds": "removed in 3.1.0 (CUSIP carve-out — bond CUSIPs are FactSet IP, licensed separately from FINRA data). Available via the hosted Oxford Ledge MCP server.",
-    "get_bond_data": "removed in 3.1.0 (CUSIP carve-out — bond CUSIPs are FactSet IP, licensed separately from FINRA data). Available via the hosted Oxford Ledge MCP server.",
+    # 2026-09-14 (W1): both said "Available via the hosted Oxford Ledge MCP
+    # server" after the hosted twins were RETIRED (2026-09-13: FINRA
+    # auth-walled the public TRACE hosts in 2026-07 and Oxford Ledge holds no
+    # licence to redistribute TRACE data). The hosted names still answer, as
+    # {status: 'retired', use_instead: 'ol_bond_directory_screen', ...} with
+    # empty lists / null prices -- a retired shape, never data -- so the
+    # pointer names the working hosted sibling instead.
+    "search_bonds": "removed in 3.1.0 (CUSIP carve-out — bond CUSIPs are FactSet IP, licensed separately from FINRA data) and RETIRED on the hosted Oxford Ledge MCP server too (2026-09-13: FINRA auth-walled its public TRACE issuer search; the hosted name now answers status 'retired' with empty lists, never a search result). For corporate-bond discovery use the hosted server's ol_bond_directory_screen (LQD/HYG directory: issuer, grade, coupon, maturity -- reference data, no prices); for one issuer's own maturity schedule use get_debt_maturities.",
+    "get_bond_data": "removed in 3.1.0 (CUSIP carve-out — bond CUSIPs are FactSet IP, licensed separately from FINRA data) and RETIRED on the hosted Oxford Ledge MCP server too (2026-09-13: FINRA auth-walled its public TRACE bond page; the hosted name now answers status 'retired' with every price field null, never a quote). For corporate-bond discovery use the hosted server's ol_bond_directory_screen (reference data, no prices); for one issuer's own maturity schedule use get_debt_maturities.",
     "get_short_interest": "removed in 3.1.0 (advertised stub with unresolved float-lineage + FINRA-attribution; returns until it's real). Available via the hosted Oxford Ledge MCP server.",
 }
 

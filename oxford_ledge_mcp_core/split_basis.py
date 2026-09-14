@@ -309,7 +309,20 @@ def apply_basis_gate(years: Sequence[str], series: Dict[str, List[Any]],
         out: Dict[str, Any] = {"basisConsistent": True, "basisChecked": True,
                                "yearPairsExamined": pairs}
         if report.get("advisory"):
+            # 2026-09-13 (external 3.4.0 review, finding 1): an advised break
+            # is NOT withheld and NOT certified -- null, the unexamined
+            # branch's value, for the same reason. True beside a populated
+            # basisAdvisory read as "consistent" on a series with a measured
+            # 3.8x discontinuity. Twin of data/eps_basis_gate.py.
+            out["basisConsistent"] = None
             out["basisAdvisory"] = report["advisory"]
+            out["basisNote"] = (
+                "An implied-share jump with NO issuer refiling to corroborate it "
+                "was found (see basisAdvisory). Nothing was withheld and this "
+                "series is NOT certified single-basis: basisConsistent is null, "
+                "not true. Treat the years on either side of each advised break "
+                "as possibly non-comparable until the issuer's own restated "
+                "figures say otherwise.")
         return out
     cut = b["boundary_year"]
     withheld: Dict[str, Dict[str, Any]] = {}

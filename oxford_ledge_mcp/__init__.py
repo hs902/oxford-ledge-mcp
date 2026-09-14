@@ -21,4 +21,4 @@ Claude Desktop config (claude_desktop_config.json):
 
 from __future__ import annotations
 
-__version__ = "3.4.0"  # keep in sync with pyproject.toml [project].version
+__version__ = "3.5.0"  # keep in sync with pyproject.toml [project].version

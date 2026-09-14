@@ -110,6 +110,117 @@ Include in your bug report:
    (`OXFORD_LEDGE_URL` set or not).
 5. `pip show oxford-ledge-mcp | grep Version` so we know which release.
 
+## 3.5.0 — additive wire changes and one value correction (the delta vet)
+
+**Tool names, argument schemas and config are unchanged; no key is renamed
+or removed.** Everything here is a new key, a new optional argument, or a
+VALUE correction inside a key that already existed. An installed 3.4.0
+keeps working against the deployed host: its fail-closed emit allowlist
+STRIPS every new key listed below (so a 3.4.0 reader sees the 3.4.0 wire,
+minus nothing it already had), and only the value corrections reach it.
+Upgrade to see the keys.
+
+### `get_fundamentals`: `basis.basisConsistent` is a tri-state (value change)
+
+`true` used to be served beside a populated `basisAdvisory` -- the advisory
+tier fires on an implied-share jump with no issuer refiling to corroborate
+it, and a field named "consistent" answering `true` on a measured 3.8x
+discontinuity read as a certification. It is now `null` in that case, the
+same value the unexamined branch already used (`basisChecked: false`), with
+`basisNote` saying which case it is. `true` still means examined and clean;
+`false` still means a corroborated break that withheld cells
+(`basis.gapBreaks` / `basis.gapNote` unchanged). A consumer that treated
+`basisConsistent !== false` as "certified single-basis" must treat `null`
+as "not certified" -- which is what the advisory always meant.
+
+### `search_bdc_borrower`: `limit` / `offset` (additive) and the ambiguous ladder
+
+- `limit` (1..5000) and `offset` (0..5000) are new OPTIONAL integer
+  arguments on the inputSchema. A call declaring NEITHER is byte-for-byte
+  the 3.4.0 wire (every `holders` row up to the host store's 5000-row
+  backstop; no `page`, no `completeness`). A call declaring either slices
+  ONLY `holders` -- every aggregate, `holdingRowCount`, `priceHistory` and
+  the relatedNorms disclosure stay computed over all rows -- and carries
+  `page` {limit, offset, returned, total, hasMore} plus a `completeness`
+  block with `total_available`. Out-of-range values are REFUSED as
+  INVALID_PARAMS on both transports, never clamped; an offset past the end
+  is an honest empty page with `total` intact. Omit the argument rather
+  than sending an explicit `null` (the wheel refuses `null` for an
+  integer; the hosted catalog treats it as unset -- a known divergence,
+  tracked).
+- The ambiguous `matches[]` rows carry `totalFvBasis`
+  (`current_holders_only`) and, when a candidate has stored rows but no
+  current holder, `totalFv: null` + `totalFvRefusalReason` instead of a
+  `0.0` summed over an empty partition. The sentence is about Oxford
+  Ledge's parsed store ("no CURRENT holder in Oxford Ledge's parsed store
+  ..."), never a claim about what any BDC filed. `relatedNormsStale` lists
+  prefix siblings with zero current holders on a resolved hit.
+
+### `get_insider_trades` / `ol_insider_recent_buys`: the 4/A fold (row count + four keys)
+
+A Form 4 and its 4/A that report the same line are served ONCE (the
+amendment), so a 3.4.0 consumer sees FEWER `trades` rows on deploy
+(host-side fold; a value change it receives). The four keys that explain
+the fold -- `isAmendment`, `accessionNumber`, `supersedesAccession`,
+`formType` -- are new on every row and reach only 3.5.0. `null` in
+`formType` means the store holds no form type for the row; it is served,
+not dropped. `totalValue` is rounded to cents at ingest.
+
+### `ol_cftc_cot`: `matched_market` / `candidates` / `markets_available` (additive)
+
+(2026-09-14, from the 2026-09-13 professional-persona audit.) The `market`
+argument is normalised by the hosted resolver -- case-folded, punctuation
+stripped, desk aliases (`CL` / `WTI` / `crude` -> `crude_oil`, `ES` / `SPX`
+/ `S&P` -> `sp500`, `GC` / `XAU` -> `gold`), substring match on the stored
+keys and labels -- and the wheel's emit allowlist admits the resolver's keys:
+`matched_market` (which curated key answered; null on the all-market
+snapshot), `candidates` (up to five nearest stored names on a miss) and
+`markets_available`. Before this the description said the keys were
+case-sensitive and a miss reached you as a bare `{error, rows: []}`.
+Additive; no key renamed.
+
+### `get_13f_holdings`: which side resolves a filer NAME (prose, no wire change)
+
+The hosted server's tool resolves a filer NAME to a CIK since 2026-09-13
+(`resolved_from` on its payload). THIS package does not -- its handler
+proxies the CIK-keyed route and refuses a name as INVALID_PARAMS, unchanged
+-- and the description now says which side does what instead of copying
+the hosted sentence.
+
+### Coverage and basis keys the hosted server added on 2026-09-13 (additive, wave G)
+
+Each of these is a new key beside an unchanged payload; 3.5.0's allowlist
+admits them, 3.4.0's strips them:
+
+- `get_corporate_events`: `coverage` {rows_stored, oldest_event_date,
+  newest_event_date} + `summary`; an unreachable store answers
+  DATA_UNAVAILABLE (the host's 503, passed through) instead of `events: []`.
+- `ol_fdic_bank`: `coverage` {institutions_loaded, active_loaded,
+  inactive_loaded, newest_repdte, last_loaded_at, ingest_scope} + `as_of`.
+- `get_fails_to_deliver`: `coverage` {window_end, days_covered,
+  days_before_earliest, days_after_latest, files_expected, files_missing,
+  window_postdates_coverage}.
+- `get_bdc_holdings`: `parseQuality` + `parseQualityNote` +
+  `portfolioStructureBasis`.
+- `ol_bdc_borrower_dispersion`: `maturity_date_precision` +
+  `margin_suppressed_note`.
+- `get_activist_stakes`: `stale_basis` (tri-state `stale`), per-row
+  `reports_zero` + `unparsed`.
+- `ol_federal_contracts`: per-row `period_complete` / `days_elapsed` /
+  `days_in_period` + payload `as_of`.
+- `ol_bdc_credit_quality`: `coverage_state` (`none_parsed` | `partial` |
+  `covered`) on `latest` and on each trend row -- and the headline
+  non-accrual number itself, which an XBRL-path filer had never returned
+  (a value change a 3.4.0 install also receives).
+
+### The key pointer
+
+Every sentence that tells an operator where an API key is created now
+says `https://www.oxfordledge.com/?panel=api-keys` (the deep link that
+opens the keys panel for a signed-in user; in-app: press K, or the key
+icon in the bottom bar). 3.4.0 said `/?view=settings`, which still
+resolves.
+
 ## 3.4.0 — four wire changes (the full 29-tool publish vet)
 
 **Tool names and config are unchanged; four argument schemas tighten.** Four
@@ -230,6 +341,11 @@ label it could not stand behind; none renames or removes a key.
   definition time in `fred_tools.py` broke the advertised `>=3.9` floor on
   the unreleased tree; the published 3.3.0 was unaffected).
 
+(Two bullets that sat here until 2026-09-14 -- the `ol_cftc_cot` resolver
+keys and the `get_13f_holdings` name-resolution note -- were filed under
+3.4.0 but landed AFTER the 3.4.0 publish; they are 3.5.0 wire changes and
+now sit under `## 3.5.0` above. COUNSEL delta vet W-4b.)
+
 ## 2.0.1 — yfinance removed (Y1 sprint, 2026-04-24)
 
 **Breaking change affecting standalone-mode users.** If you were
@@ -349,7 +465,12 @@ if and when they land here).
 
 ## Version history
 
-- **3.4.0** (unreleased) — the full 29-tool publish vet: four wire changes
+- **3.5.0** (2026-09-14) — the delta vet: additive keys (the wave-G
+  coverage / basis keys, `search_bdc_borrower` paging, the `ol_cftc_cot`
+  resolver keys, the insider 4/A fold's four keys) and one value correction
+  (`basis.basisConsistent` tri-state). No key renamed or removed. See above.
+- **3.4.0** (2026-09-13; this row read "unreleased" until 2026-09-14 -- the
+  publish landed the same day the row was written) — the full 29-tool publish vet: four wire changes
   (`TotalDebt` -> `LongTermDebt`; the two Plus tools serve the hosted EDGAR
   shapes; `events[].id` removed; `dateBasis` truthful), `_meta` on every
   response, one dispatcher seam that refuses non-object bodies and never
@@ -361,7 +482,12 @@ if and when they land here).
   `get_corporate_events` now strip CUSIPs/ratings; `get_value_investing_fact`
   repointed off a vendor endpoint; `get_fred_data` refuses third-party-copyright
   FRED series (S&P/ICE/Moody's/CBOE) **fail-closed**. 13 tools. Pin `==3.0.1`
-  for the removed tools.
+  for the removed tools. [Annotated 2026-09-14: a `==3.0.1` pin no longer
+  restores `search_bonds` / `get_bond_data` as WORKING tools -- FINRA
+  auth-walled the public TRACE hosts they scraped in 2026-07, and on
+  2026-09-13 both were RETIRED on the hosted server as well (`status:
+  "retired"`, `use_instead: ol_bond_directory_screen`). The dated record
+  above is kept as written.]
 - **3.0.0** (2026-07-21) — gov-public-data-only surface: 13 more vendor
   tools removed; the package is now 16 SEC/FRED/Treasury/FINRA tools. See above.
 - **2.1.0** (2026-07-21) — FMP-removal: 7 vendor-fed valuation/price

@@ -152,6 +152,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
     # /api/insider-activity -- measured shipping at row AND top level
     # because this entry admitted it explicitly. No consumer reads it.
     "get_corporate_events": frozenset({
+        # 2026-09-13 wave G (external live review of 3.4.0): the keys the wave's
+        # builders put on the wire; each named in its Pattern-K artifact.
+        "coverage", "rows_stored", "oldest_event_date", "newest_event_date",
         "events", "eventdate", "eventtype", "headline",
         "description", "amount", "counterparty", "counterpartyticker",
         "status", "sourceurl", "source",
@@ -240,6 +243,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
     # BOTH BRANCHES are admitted deliberately: the hit and miss shapes differ,
     # and a filter built from only one would silently amputate the other.
     "search_bdc_borrower": frozenset({
+        # 2026-09-13 wave G (external live review of 3.4.0): the keys the wave's
+        # builders put on the wire; each named in its Pattern-K artifact.
+        "relatednormsstale", "totalfvbasis", "totalfvrefusalreason",
         "age_days", "aggregatesbasis", "ambiguous", "asof",
         "avgmarkedprice", "avgmarkedpricebasis", "avgmarkedpriceunweighted", "bdclatestfiling",
         "bdcname", "bdcticker", "borrowername", "borrowernorm",
@@ -271,6 +277,14 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # 2026-09-13 (deep audit f3-bdc-core-7, wave D / D4): the same above-par
         # triple on the borrower read (Caitec at 145.74 is the measured case).
         "markabovepar", "aboveparrowcount", "markbasis",
+        # 2026-09-13 wave K / K4 (OWNER B5a): the declared-page block
+        # `page` {limit, offset, returned, total, hasMore} plus the tool-
+        # supplied completeness block's `total_available` (`completeness`,
+        # `limit`, `returned`, `complete`, `completeness_basis`, `rows_key`
+        # are frame keys). Admitted as CODE, in the same change as the
+        # producer: this filter drops silently, and a comment-only admission
+        # was a real bug earlier today.
+        "page", "offset", "total", "hasmore", "total_available",
     }),
     "get_bdc_list": frozenset({
         "bdcs",
@@ -282,6 +296,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         "fairvaluerefused", "fairvaluerefusalreason",
     }),
     "get_bdc_holdings": frozenset({
+        # 2026-09-13 wave G (external live review of 3.4.0): the keys the wave's
+        # builders put on the wire; each named in its Pattern-K artifact.
+        "parsequality", "parsequalitynote", "portfoliostructurebasis",
         # envelope
         "bdcticker", "bdcname", "filingdate", "filingtype", "periodend",
         "totalholdings", "totalparamount", "totalfairvalue",
@@ -354,6 +371,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
     # emits (vet L-1, checked builder-by-builder). summary/count/as_of/
     # attribution/disclaimer ride _ENVELOPE_KEYS.
     "ol_bdc_borrower_dispersion": frozenset({
+        # 2026-09-13 wave G (external live review of 3.4.0): the keys the wave's
+        # builders put on the wire; each named in its Pattern-K artifact.
+        "maturity_date_precision", "margin_suppressed_note",
         # envelope (moat_reads.py dispersion return dict)
         "borrower_norm", "completeness", "spread_unit", "fair_value_unit",
         "marked_price_unit", "filing_date_range", "lenders",
@@ -497,6 +517,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
     # corpus size and ingest ordering, and terms.html §5.5 prohibits systematic
     # corpus reconstruction. Dropped from the manifest description too.
     "ol_insider_recent_buys": frozenset({
+        # 2026-09-13 wave G (external live review of 3.4.0): the keys the wave's
+        # builders put on the wire; each named in its Pattern-K artifact.
+        "isamendment", "accessionnumber", "supersedesaccession", "formtype",
         "buys", "filingdate", "insidername", "isderivative", "position",
         "pricepershare", "securitytitle", "shares", "sharesowned",
         "since_days", "title", "totalvalue", "transactiondate",
@@ -513,6 +536,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
     # had never been created. It exists now and the keys below are from a
     # populated window, not an empty one.
     "get_fails_to_deliver": frozenset({
+        # 2026-09-13 wave G (external live review of 3.4.0): the keys the wave's
+        # builders put on the wire; each named in its Pattern-K artifact.
+        "files_expected", "files_missing", "window_end", "days_covered", "days_before_earliest", "days_after_latest",
         "date", "days", "description", "fails", "history", "price",
         # 2026-09-13 (deep audit f5-gov-feeds-2, wave D / D5): the coverage floor.
         # An empty history is normal ONLY inside the loaded window, so the payload
@@ -536,6 +562,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
     # described. Pinned by tests/test_mcp_activist_stakes_purpose_never_
     # written_contract.py, which drives the writer with EDGAR stubbed.
     "get_activist_stakes": frozenset({
+        # 2026-09-13 wave G (external live review of 3.4.0): the keys the wave's
+        # builders put on the wire; each named in its Pattern-K artifact.
+        "stale_basis", "reports_zero", "unparsed",
         "accession_number", "filer_name", "filing_date", "filings",
         "form_type", "is_activist", "percent_of_class",
         "shares", "updated_at",
@@ -564,6 +593,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
     # `market_label` is an OL-authored string embedding CME/S&P marks
     # (`data/cftc_cot.py:53`) -- descriptive/nominative use, never endorsement.
     "ol_cftc_cot": frozenset({
+        # 2026-09-13 wave G (external live review of 3.4.0): the keys the wave's
+        # builders put on the wire; each named in its Pattern-K artifact.
+        "markets_available",
         "market", "market_key", "market_label", "mm_long", "mm_net",
         "mm_short", "open_interest", "report_date", "report_type", "rows",
         # SECOND BRANCH, added after the first cut of this set missed it. My
@@ -574,6 +606,16 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # between branches) committed by the script whose own docstring cites
         # it. Caught by the description-vs-allowlist contract, not by review.
         "contract_code", "source_dataset",
+        # 2026-09-14 (W1, MCP professional-persona audit P2-6): the hosted
+        # resolver's two keys from wave N -- `matched_market` (which curated
+        # key a case-folded / desk-alias / substring match answered; null on
+        # the all-market snapshot) and `candidates` (up to five nearest stored
+        # names on a miss, a list of strings). Both are Oxford Ledge's own
+        # resolver bookkeeping over the curated catalog -- the same class as
+        # `markets_available` above, no CFTC or CME lineage. Without them the
+        # wheel served a miss as a bare {error, rows: []} and a fuzzy hit
+        # with no key saying which market answered.
+        "matched_market", "candidates",
     }),
 
     # FDIC BankFind verbatim EXCEPT `ticker`, which is NOT an FDIC field --
@@ -582,6 +624,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
     # the sentence saying so, because `_meta.source` would otherwise be false
     # for that one field. (`ticker` is an envelope key, hence not listed here.)
     "ol_fdic_bank": frozenset({
+        # 2026-09-13 wave G (external live review of 3.4.0): the keys the wave's
+        # builders put on the wire; each named in its Pattern-K artifact.
+        "coverage", "institutions_loaded", "active_loaded", "inactive_loaded", "newest_repdte", "last_loaded_at", "ingest_scope",
         "active", "asset", "bkclass", "cert", "city", "dep", "estymd",
         "institutions", "name", "query", "repdte", "stname", "webaddr",
     }),
@@ -592,6 +637,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
     # crosswalk's own coverage admission, and without it a partial mapping reads
     # as complete. C3 STRIP `id`.
     "ol_federal_contracts": frozenset({
+        # 2026-09-13 wave G (external live review of 3.4.0): the keys the wave's
+        # builders put on the wire; each named in its Pattern-K artifact.
+        "period_complete", "days_elapsed", "days_in_period",
         "amount", "dropped_unresolved", "end_date", "entity_count",
         "fetched_at", "fiscal_year", "hint", "leaderboard", "name",
         "obligations", "recipient_id", "recipients", "start_date",
@@ -649,6 +697,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
     # `determinate_coverage` is C3 MUST-ADMIT: without it `flagged_pct: null`
     # ("withheld, coverage <90%") is indistinguishable from "no data".
     "ol_bdc_credit_quality": frozenset({
+        # 2026-09-13 wave G (external live review of 3.4.0): the keys the wave's
+        # builders put on the wire; each named in its Pattern-K artifact.
+        "coverage_state",
         "determinate_coverage", "determinate_fv", "filing_date",
         "flagged_fv", "flagged_pct", "latest", "quarter_key", "quarters",
         "total_debt_fv", "trend",
@@ -919,6 +970,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
     # entry makes the strip a declared boundary instead of an accident of the
     # reshaper: if someone ever spreads the row, `id` still does not ship.
     "get_insider_trades": frozenset({
+        # 2026-09-13 wave G (external live review of 3.4.0): the keys the wave's
+        # builders put on the wire; each named in its Pattern-K artifact.
+        "isamendment", "accessionnumber", "supersedesaccession", "formtype",
         "date", "datebasis", "filingdate", "insider", "is_open_market",
         "position", "pricepershare", "shares", "sharesowned",
         "totalfetched", "trades", "transactiondate", "transtypelabel",
@@ -1048,13 +1102,49 @@ def _keys_are_data_by_shape(o: dict[Any, Any]) -> bool:
         for k in o)
 
 
+#: What a shape rule must NOT admit: representative VALUES of the licensed /
+#: identifying classes, not the carve-out KEY NAMES. 2026-09-13 (external
+#: 3.4.0 review, finding 2): the guard below used to full-match each shape
+#: against CARVEOUT_ID_KEYS -- "cusip", "sprating" -- but a shape admits key
+#: VALUES (a dict keyed by CUSIP has "037833100" as the key, never the word
+#: "cusip"), so a future `[A-Z0-9]{9}` shape would have passed that guard and
+#: admitted every CUSIP-keyed container. Harmless for the one shape shipped
+#: (a four-digit year cannot spell an identifier) and exactly the false
+#: assurance the next shape would be added under. One specimen per class the
+#: carve-outs and the CISO review name; the guard reads the LIST, so adding a
+#: class is one line here and never a new guard.
+#:
+#: Every specimen is SYNTHETIC -- shape-valid, check-digit-valid where the
+#: format has one, and built from the reserved / degenerate end of its
+#: namespace so it is no real issuer's (2026-09-14, COUNSEL 3.5.0 delta vet
+#: W-2 / ruling R-B: a shape-guard specimen is a test value, and a test value
+#: in shipped source is subject to the same never-leaves-through-the-wheel
+#: frame as a wire value). This is the class this package never admits; a
+#: real identifier has no engineering role in a distributed module.
+LICENSED_VALUE_SPECIMENS: dict[str, str] = {
+    "cusip": "999999998",             # 9 chars, all-digit issuer + issue, check 8
+    "cusip_alpha_issuer": "99999Z990",  # a letter inside the issuer number, check 0
+    "isin": "XS9999999998",           # ISO 6166: XS prefix + 9 + Luhn check 8
+    "sedol": "BZZZZZ4",               # 6 alnum + weighted check 4
+    "lei": "999900ZZZZZZZZZZZZ28",    # ISO 17442: 20 chars, MOD 97-10 check 28
+    "figi": "BBGZZZZZZZZ7",           # BBG + 8 consonants/digits + check 7
+    "moodys_rating": "Baa2",
+    "sp_rating": "BBB+",
+    "fitch_rating": "A-",
+}
+
 for _shape_name, _shape in DATA_KEY_SHAPES.items():
-    _hit = sorted(k for k in CARVEOUT_ID_KEYS if _shape.fullmatch(k))
+    _hit = sorted(cls for cls, specimen in LICENSED_VALUE_SPECIMENS.items()
+                  if _shape.fullmatch(specimen))
     if _hit:
         raise AssertionError(
-            f"DATA_KEY_SHAPES[{_shape_name!r}] matches carve-out key(s) {_hit}"
-            " -- a shape rule that passes a licensed identifier is the leak"
-            " the allowlist inversion exists to prevent")
+            f"DATA_KEY_SHAPES[{_shape_name!r}] admits a licensed-identifier VALUE"
+            f" ({_hit}) as a data key -- a shape rule that passes such a key is"
+            " the leak the allowlist inversion exists to prevent")
+    _hit_names = sorted(k for k in CARVEOUT_ID_KEYS if _shape.fullmatch(k))
+    if _hit_names:
+        raise AssertionError(
+            f"DATA_KEY_SHAPES[{_shape_name!r}] matches carve-out key name(s) {_hit_names}")
 
 
 # Every data-keyed container must belong to a tool that HAS an allowlist, and

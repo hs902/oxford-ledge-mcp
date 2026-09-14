@@ -221,12 +221,19 @@ def _api_get(path, params=None, timeout=15):
                    "https://www.oxfordledge.com/pricing."
                    if _S._API_KEY else
                    # SF-MCP-CONNECT-HOWTO T7 / C-12 (2026-09-13): /account does
-                   # not exist; the key lives at /?view=settings under YOUR API
-                   # KEYS -- the same sentence the hosted anon-tool refusal
-                   # carries (routes_mcp_public_fastapi.py).
+                   # not exist; the key lives in YOUR API KEYS -- the same
+                   # sentence the hosted anon-tool refusal carries
+                   # (routes_mcp_public_fastapi.py). Wave I / I5 (2026-09-13,
+                   # the OWNER's own correction): the panel is reached from the
+                   # bottom bar (the key icon, or K), NOT through
+                   # /?view=settings; /?panel=api-keys (wave H, 51794d18) opens
+                   # it directly for a signed-in user. Class contract:
+                   # tests/test_api_key_pointer_surfaces_contract.py.
                    "The client's operator sets OXFORD_LEDGE_API_KEY (keys are "
-                   "created at https://www.oxfordledge.com/?view=settings under "
-                   "YOUR API KEYS; there is no /account page) — without "
+                   "created at https://www.oxfordledge.com/?panel=api-keys "
+                   "under YOUR API KEYS, which a signed-in operator also "
+                   "reaches by pressing K or clicking the key icon in the "
+                   "bottom bar; there is no /account page) — without "
                    "one this client is anonymous and only the free public-data "
                    "tools work.")
                 + _NO_ASK,
@@ -402,7 +409,12 @@ _BARE_CODE_TOKEN = re.compile(r"^[a-z][a-z0-9_]*$")
 #: (routes/api_errors.py: "/pricing"). Same literal the REST leg's 402 branch
 #: has used since MONETIZE-2.
 _OL_PUBLIC_ORIGIN = "https://www.oxfordledge.com"
-_OL_KEYS_URL = _OL_PUBLIC_ORIGIN + "/?view=settings"
+#: Where a key is created: the /?panel=api-keys deep link (wave H, 51794d18)
+#: opens YOUR API KEYS directly for a signed-in user. It was /?view=settings
+#: until wave I / I5 (2026-09-13) -- the OWNER's correction: the panel is
+#: reached from the bottom bar (the key icon, or K), and the settings view
+#: only carried a row pointing at it.
+_OL_KEYS_URL = _OL_PUBLIC_ORIGIN + "/?panel=api-keys"
 
 
 _TIER_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,39}")
@@ -463,7 +475,8 @@ def _tier_refusal_message(body, keyed):
             f"refused it as a free-tier caller. If the client's operator has "
             f"an Oxford Ledge plan that includes the {tier} tier, the fix is "
             f"to set OXFORD_LEDGE_API_KEY in the client config (keys are "
-            f"created at {_OL_KEYS_URL} under YOUR API KEYS); otherwise "
+            f"created at {_OL_KEYS_URL} under YOUR API KEYS -- press K or "
+            f"click the key icon in the bottom bar once signed in); otherwise "
             f"upgrade at {upgrade}."
             + (f" Host: {host_sentence}" if host_sentence else "")
             + _NO_ASK_OPERATOR)
