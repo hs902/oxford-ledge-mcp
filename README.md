@@ -1,7 +1,7 @@
 # Oxford Ledge MCP Server
 
-> **Last updated:** 2026-09-14
-> **Version:** 3.5.0 (gov-public-data-only surface; CUSIP + third-party-FRED carve-outs)
+> **Last updated:** 2026-09-21
+> **Version:** 3.6.0 (gov-public-data-only surface; CUSIP + third-party-FRED carve-outs)
 
 Financial data tools for [Claude Desktop](https://claude.ai/download) via the [Model Context Protocol](https://modelcontextprotocol.io/).
 
@@ -13,7 +13,7 @@ Financial data tools for [Claude Desktop](https://claude.ai/download) via the [M
 2. 2.0.1 removed yfinance from this package (it was a ToS-violating scraper dependency). 11 tools that used to work standalone now require `OXFORD_LEDGE_URL`.
 3. 2.0.2 internal-refactor cleanup; no behavior change.
 
-**This is 3.5.0.** Its wire changes from 3.4.0 are in [MIGRATING.md](https://github.com/hs902/oxford-ledge-mcp/blob/main/MIGRATING.md), and every one is additive or a value correction -- no key is renamed or removed: `get_fundamentals` serves `basis.basisConsistent` as `null` (not `true`) beside a populated `basisAdvisory` (an implied-share jump with no issuer refiling is disclosed, not certified; `false` stays reserved for a corroborated break), `get_insider_trades` / `ol_insider_recent_buys` serve a Form 4 and its 4/A that report the same line ONCE with `isAmendment` / `accessionNumber` / `supersedesAccession` / `formType` on every row, `search_bdc_borrower` takes `limit` / `offset` (a call declaring either gets `page` + `completeness`; a call declaring neither is byte-for-byte the 3.4.0 wire) and its ambiguous `matches[]` refuse an unmeasured total as `totalFv: null` + `totalFvBasis` + `totalFvRefusalReason`, `ol_cftc_cot` carries `matched_market` / `candidates` / `markets_available`, the coverage keys the hosted server added on 2026-09-13 (`coverage` on `get_corporate_events` / `ol_fdic_bank` / `get_fails_to_deliver`, `parseQuality` on `get_bdc_holdings`, `stale_basis` / `reports_zero` / `unparsed` on `get_activist_stakes`, `period_complete` on `ol_federal_contracts`, `coverage_state` on `ol_bdc_credit_quality`) now pass this package's fail-closed emit allowlist (an installed 3.4.0 strips them), and the key pointer is `https://www.oxfordledge.com/?panel=api-keys`. The 3.4.0 changes (`TotalDebt` -> `LongTermDebt`, the two Plus tools' hosted EDGAR shapes, `events[].id` removed, `dateBasis` truthful) are under their own heading there.
+**This is 3.6.0.** Its wire changes from 3.5.0 are in [MIGRATING.md](https://github.com/hs902/oxford-ledge-mcp/blob/main/MIGRATING.md), and every one is additive, a value correction, or a refusal that now names itself -- no key is renamed or removed: `get_holders` serves the hosted 13F superseded-parent fold that this package used to strip (`holders[].stale_quarters` / `ahead_quarters` / `fund_cik`, a top-level `superseded_parents` list with `superseded_by`, `superseded_by_shares`, `reconciled_pct`, `unstated` and `also_in_holders` on each withheld row, `completeness.supersededReturned` / `supersededWithheldTotal`, and a top-level `unstated` when the host sent the fold in a shape this client could not read), `completeness.complete` reads `false` whenever anything was withheld (it used to answer only for the fetched rows), an empty `holders` beside a non-empty fold gets a sentence naming the fold rather than the coverage note, a hosted `NOT_FOUND` is surfaced as `ToolError.NOT_FOUND` with the host's sentence quoted as data, and `search_bdc_borrower`'s `descriptionSource` prose says that `manual` is the store's default and not an attestation. The self-limits are new and disclosed below under "Resource limits this client enforces on itself": per-host success-body ceilings (32 MB SEC companyfacts, 16 MB SEC submissions, 8 MB SEC ticker map, 16 MB FRED, 8 MB the Oxford Ledge host), a 32 MB aggregate cache budget beside the 500-entry one, a 200-character bound on every `params_accepted` echo whatever its shape, and a refusal by name for a response nested deeper than the isolation copy reaches. **One config change:** the plaintext-key loopback exemption is an address check, so `http://127.1:...` no longer counts as loopback -- write `http://127.0.0.1:...`. The 3.5.0 changes (`basisConsistent` null beside an advisory, the Form 4 + 4/A single line with `isAmendment` / `supersedesAccession`, `limit` / `offset` on `search_bdc_borrower`, `matched_market` on `ol_cftc_cot`, the 2026-09-13 coverage keys) are under their own heading there.
 
 ---
 
@@ -85,7 +85,7 @@ For full functionality, point the server at a running Oxford Ledge instance. Add
 }
 ```
 
-`OXFORD_LEDGE_URL` should be the URL of an Oxford Ledge instance you have access to (the public app, your own self-hosted deploy, or `http://localhost:5000` for local dev).
+`OXFORD_LEDGE_URL` should be the URL of an Oxford Ledge instance you have access to (the public app, your own self-hosted deploy, or `http://localhost:5000` for local dev). If `OXFORD_LEDGE_API_KEY` is also set, a plain `http://` URL is refused unless the host is a loopback address (`127.0.0.1`, `127.x.y.z`, `[::1]`) or literally `localhost` -- the key would otherwise travel in the clear. Note that the `127.1` shorthand is not a parseable address and is refused; write `127.0.0.1`.
 
 `OXFORD_LEDGE_API_KEY` is your Oxford Ledge API key — create one in the app under **YOUR API KEYS → + Create Key**: sign in, then press **K** or click the key icon in the bottom bar, or open [oxfordledge.com/?panel=api-keys](https://www.oxfordledge.com/?panel=api-keys), which opens the panel directly (there is no `/account` page). It is sent as the `x-api-key` header (never in a URL, a log line or an error message, and never forwarded across a redirect) and it is what makes the tools **yours**:
 
@@ -312,6 +312,33 @@ tools return is governed by the Oxford Ledge terms of service
   parties any data, datasets, or content obtained from the Service, whether in
   raw, aggregated, or derived form, without prior written permission from
   Oxford Ledge."
+
+---
+
+## Resource limits this client enforces on itself
+
+These are properties of the CLIENT, not of any server. They exist because a
+desktop MCP client holds whatever a host sends in the memory of the process
+your editor launched, and because `OXFORD_LEDGE_URL` is operator-supplied.
+
+- **Response size.** A success body over its host's ceiling is refused before
+  it is read in full: nothing is parsed, served or cached, and the refusal
+  names the ceiling so you can tell it from an outage. The ceilings are per
+  host -- 8 MB for the Oxford Ledge instance you configure, 32 MB for SEC
+  XBRL companyfacts (a large filer's document legitimately exceeds 8 MB),
+  16 MB for SEC submissions, 8 MB for SEC's ticker map, 16 MB for FRED.
+- **Cache size.** Tool results are cached in-process for the tool's TTL,
+  under TWO budgets: at most 500 entries, and at most 32 MB of aggregate
+  serialized payload. When the total would exceed the byte budget the
+  earliest-expiring entries are dropped; a single result too large for the
+  budget is simply not cached, and the call still returns normally. A cache
+  miss is never an error. Both budgets are per process, and the cache is not
+  shared between processes.
+- **Response nesting.** A response nested deeper than roughly 500 levels is
+  refused with a message saying so, rather than served. This is the depth at
+  which the copy that keeps one caller's result from mutating another's stops
+  being safe; real Oxford Ledge and SEC documents are a handful of levels
+  deep.
 
 ---
 

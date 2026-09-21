@@ -110,6 +110,106 @@ Include in your bug report:
    (`OXFORD_LEDGE_URL` set or not).
 5. `pip show oxford-ledge-mcp | grep Version` so we know which release.
 
+## 3.6.0 — the 13F superseded-parent fold on `get_holders` (additive), one value correction, one config shorthand
+
+**Tool names and argument schemas are unchanged; no key is renamed or
+removed.** Almost everything here is a NEW key on `get_holders`; the two
+exceptions are stated first so nobody has to find them. (1) `completeness.complete`
+on `get_holders` now reads `false` whenever the fold withheld anything -- it used
+to answer only "was every fetched row returned", which was `true` beside a
+non-empty `superseded_parents`. A consumer that gated on `complete` will see
+`false` more often, and `supersededWithheldTotal` beside it says how much was
+withheld. (2) Config: the plaintext-key loopback exemption is an ADDRESS check,
+so `OXFORD_LEDGE_URL=http://127.1:...` with an API key set is now refused; write
+`http://127.0.0.1:...`. Every other `127.x.y.z`, `[::1]` and literal `localhost`
+still pass. An installed 3.5.0
+keeps working against the deployed host: its fail-closed emit allowlist
+STRIPS every key below, so a 3.5.0 reader sees the 3.5.0 wire minus nothing it
+already had. Upgrade to see them.
+
+This section exists because the CHANGELOG's `## Unreleased` said the cut
+changed no tool's served keys, and it changed nine. The delta vet's K-1 / C-3
+is that a release record which denies its own largest wire change is worse
+than one that is merely terse.
+
+### `get_holders`: `stale_quarters` / `ahead_quarters` on each row
+
+`stale_quarters` is the row's distance in quarters from the payload's as-of
+anchor (`coverage.quarter`), 0 = current. It is **ABSENT, never 0**, when the
+row could not be dated -- a fabricated 0 would turn "could not be dated" into
+"current". `ahead_quarters` (>= 1, absent otherwise) marks a row struck NEWER
+than the anchor; such a row keeps `stale_quarters` 0, so without this key it is
+indistinguishable from a row AT the anchor. Both are range-guarded on the
+wheel: a value outside the stated range is DROPPED, never clamped.
+
+### `get_holders`: `superseded_parents` (top level) and `fund_cik` on every row
+
+The host withholds a stale filer row from `holders` when its shares reconcile
+within 1% to same-quarter siblings of its own fund-name family (the Vanguard
+double count). The withheld rows now ride in `superseded_parents`, in the same
+shape as a served row, plus:
+
+- `superseded` -- the producer's own verdict, carried through, never
+  synthesised;
+- `superseded_by` -- the `fund_cik`s of the rows that supersede it. Every
+  served row now carries `fund_cik` too, so the reference resolves inside the
+  same payload whenever the superseding row survived the top-10 cut;
+- `superseded_by_shares` + `reconciled_pct` -- BOTH operands of the
+  reconciliation beside the row's own `shares`, so the verdict states its
+  arithmetic instead of asserting it. `reconciled_pct` is a percentage of the
+  withheld row's own `shares`;
+- `unstated` -- present only when the producer did not state one of those
+  parts in a usable form. The part is dropped rather than faked and this key
+  names it. Read such a row as a withholding whose arithmetic or attribution
+  is missing, never as a reconciled one.
+
+`completeness.supersededReturned` / `completeness.supersededWithheldTotal`
+disclose the cut: `superseded_parents` is capped at 10 exactly like `holders`.
+
+**`[]` is not an all-clear.** It means the fold ran and withheld nothing
+*among the rows it could date*. A row carrying no `stale_quarters` was never
+eligible to be folded and is served in full beside its current sibling, so an
+`[]` beside undated rows is a blind pass; the wire cannot distinguish the two.
+The key is ABSENT only when the producer sent no fold at all.
+
+- `also_in_holders` -- present only when this withheld row is ALSO in the
+  served `holders` list. The two lists are built independently, so nothing
+  stopped a filer appearing in both; for such a row the fold did NOT remove
+  the double count, and the instruction below is inert because the row is
+  already in the table. The row is annotated rather than dropped: the
+  disagreement is the producer's, and the reader is the one who can act on it.
+
+`completeness.complete` is **`false` whenever anything was withheld.** It
+answers "is this every filer", and the fold reduced the list before this
+client saw it -- it previously read `true` because it was really answering
+"was every FETCHED row returned", and the withheld rows never reach the fetch.
+
+An EMPTY `holders` list beside a non-empty `superseded_parents` now carries a
+DIFFERENT `note`: it says the producer returned rows and the fold withheld
+every one of them. The scope note ("13F-HR COM positions, last 6 quarters...")
+would have sent a reader looking for a coverage gap when the answer is in the
+next key.
+
+A `superseded_parents` that arrives as something other than a list (a dict, a
+string, an explicit `null`) is now marked with a top-level
+`unstated: ["superseded_parents"]` instead of being dropped to key-absent --
+dropping it rendered a BROKEN producer identical to a host that never folded,
+erasing the one distinction (`absent` vs `[]`) the design exists to preserve.
+Treat it as "the fold did not run", never as "the fold withheld nothing".
+
+**Do NOT add these rows back into `holders` or into any total** -- that
+restores the double count the fold removes. The one case where that
+instruction cannot help you is the `also_in_holders` row above; there, the
+double count is already in `holders` and the flag is the only thing that says
+so.
+
+### `search_bdc_borrower`: the `descriptionSource` prose (no value change)
+
+The description now enumerates all five `descriptionSource` values, names the
+three that suppress the AI-generated flag, and states that `manual` is the
+store's DEFAULT and therefore not an attestation of a human author. No served
+value changes; the label is decided producer-side for every channel.
+
 ## 3.5.0 — additive wire changes and one value correction (the delta vet)
 
 **Tool names, argument schemas and config are unchanged; no key is renamed

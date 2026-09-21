@@ -75,6 +75,9 @@ import urllib.error
 import urllib.request
 
 from oxford_ledge_mcp_core import FUNDAMENTAL, ToolError, mcp_tool, normalize_ticker
+from oxford_ledge_mcp_core.body_limits import (
+    SEC_SUBMISSIONS_BODY_CAP, SEC_TICKER_MAP_BODY_CAP, BodyTooLarge,
+    read_capped)
 
 #: One declared UA for every sec.gov read the wheel makes (SEC's fair-access
 #: policy wants a contact address; the two tools and the 13F resolver share it).
@@ -186,7 +189,14 @@ def tool_get_sec_filings(args):
     req = urllib.request.Request(cik_url, headers={"User-Agent": _SEC_UA})
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            raw = resp.read()
+            # Bounded since 2026-09-21 (CISO reseat L-1); see
+            # oxford_ledge_mcp_core.body_limits for the measured numbers.
+            raw = read_capped(resp, SEC_SUBMISSIONS_BODY_CAP, f"SEC EDGAR's {api}")
+    except BodyTooLarge as e:
+        # Ordered ahead of the HTTPError arm because this is not an HTTP
+        # status condition at all, and ahead of the catch-all so the refusal
+        # names the ceiling instead of reading as an unnamed transport fault.
+        raise ToolError(ToolError.DATA_UNAVAILABLE, str(e))
     except urllib.error.HTTPError as e:
         if e.code == 404:
             # b01-sec-standalone-2: a 404 reached through a TICKER said
@@ -285,7 +295,15 @@ def _resolve_ticker_to_cik_via_sec(ticker):
                 "https://www.sec.gov/files/company_tickers.json",
                 headers={"User-Agent": _SEC_UA})
             with urllib.request.urlopen(req, timeout=10) as resp:
-                tickers_data = json.loads(resp.read().decode("utf-8"))
+                # Bounded since 2026-09-21 (CISO reseat L-1). One document for
+                # the whole filer registry, so its size tracks the market and
+                # not any caller's argument -- see body_limits for the
+                # measured figure behind the ceiling.
+                tickers_data = json.loads(read_capped(
+                    resp, SEC_TICKER_MAP_BODY_CAP,
+                    "SEC's ticker map").decode("utf-8"))
+        except BodyTooLarge as e:
+            raise ToolError(ToolError.DATA_UNAVAILABLE, str(e))
         except Exception as e:
             raise ToolError(
                 ToolError.DATA_UNAVAILABLE,

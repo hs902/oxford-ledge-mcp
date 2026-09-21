@@ -91,6 +91,8 @@ import urllib.request
 
 from oxford_ledge_mcp_core import FUNDAMENTAL, ToolError, mcp_tool
 from oxford_ledge_mcp_core.errors import _JSON_TYPE_NAMES
+from oxford_ledge_mcp_core.body_limits import (
+    FRED_BODY_CAP, BodyTooLarge, read_capped)
 
 
 # ── shared FRED transport (the ONE urlopen site for the family) ──────────────
@@ -205,7 +207,21 @@ def _fred_get_json(url: str) -> dict:
     try:
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=10) as resp:
-            raw = resp.read()
+            # Bounded since 2026-09-21 (CISO reseat L-1). This was a bare
+            # `resp.read()`: the error body has been read bounded since the
+            # 3.2.0 vet while the SUCCESS body was not, on a host this client
+            # holds, decodes, parses and caches for the tool's TTL. The
+            # ceiling is per-host and lives in one place --
+            # oxford_ledge_mcp_core.body_limits -- so the transport's 8 MB
+            # Oxford Ledge figure is not silently reused for a host whose
+            # documents are a different size.
+            raw = read_capped(resp, FRED_BODY_CAP, "FRED")
+    except BodyTooLarge as e:
+        # Classified "transport", not "bad_body": the body may well be valid
+        # FRED JSON. What failed is this client's willingness to hold it,
+        # which is the same class as a reset or a timeout and is NOT a
+        # statement about the series id the caller asked for.
+        raise _FredFetchError("transport", _bounded(e)) from None
     except urllib.error.HTTPError as e:
         raise _classify_fred_http_error(e) from None
     except urllib.error.URLError as e:

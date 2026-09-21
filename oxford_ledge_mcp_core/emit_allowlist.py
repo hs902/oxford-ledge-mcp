@@ -250,8 +250,17 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         "avgmarkedprice", "avgmarkedpricebasis", "avgmarkedpriceunweighted", "bdclatestfiling",
         "bdcname", "bdcticker", "borrowername", "borrowernorm",
         # 3.4.0 vet b05-bdc-core-6 / CV-13 (2026-09-12, B5b): the borrower_
-        # descriptions.source column (csv | wellknown | template | research)
-        # so a model-written profile is labelled on the wire.
+        # descriptions.source column, emitted VERBATIM so a model-written
+        # profile is labelled on the wire. CORRECTED 2026-09-21: the domain
+        # is FIVE values, not the four this comment used to list -- `csv`,
+        # `wellknown`, `template` (the static directory writers), the
+        # research-seed tag (model-written), and `manual`, which is the
+        # store's DEFAULT when the writer did not state one and is therefore
+        # NOT an attestation of a human author. The distinction is load-
+        # bearing: only the first three suppress the `ai_generated` pair, so
+        # a `manual` or absent tag ships beside `ai_generated: true`. This
+        # allowlist admits the value; it never re-decides the label -- that
+        # rule lives once, producer-side, for every channel.
         "description", "descriptionsource", "error", "fairvalue", "filingdate",
         "filingtype", "found", "holdercount", "holdercountbasis",
         "holders", "holderstatus", "holdingrowcount", "industry",
@@ -961,6 +970,46 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # filter -- admitted per tool, the way the dispersion entry does.
         # `error` / `_meta` ride _ENVELOPE_KEYS.
         "note",
+        # 2026-09-19 (P1-13f superseded-parent fold): the route now states each
+        # row's vintage distance (`stale_quarters`, 0 = current) and records the
+        # rows it WITHHELD (`superseded_parents`, each carrying `superseded` +
+        # `superseded_by: [fund_cik]`). An agent reading a holders table must be
+        # able to see that a row is three quarters behind the as-of quarter --
+        # that is exactly the disclosure holders_vintage.py exists for, so the
+        # fail-closed filter must not strip it. `fund_cik` / `fund_name` /
+        # `shares` / `quarter` ride the withheld rows; `fund_cik` is a public
+        # SEC filer id, not a row id (no CARVEOUT_ID_KEYS class).
+        "stale_quarters", "superseded_parents", "superseded", "superseded_by",
+        "fund_cik", "fund_name",
+        # 2026-09-21: the fold's remaining operands, measured DROPPED by this
+        # filter before they were named here -- the withheld verdict reached
+        # the wire without the arithmetic behind it, which is a verdict a
+        # reader can only take on trust. `superseded_by_shares` is the sibling
+        # sum the withheld row reconciles to and `reconciled_pct` their
+        # distance apart, so BOTH operands of the ratio ship beside the row's
+        # own `shares` instead of an inherited number. `ahead_quarters` is the
+        # additive companion to `stale_quarters`: a row struck NEWER than the
+        # as-of quarter keeps `stale_quarters` 0, so without it such a row is
+        # indistinguishable from one AT the anchor.
+        "ahead_quarters", "superseded_by_shares", "reconciled_pct",
+        # 2026-09-21 (delta-vet fixes K-4 / K-5): `supersededreturned` +
+        # `supersededwithheldtotal` are the withheld list's half of the
+        # returned/total disclosure `completeness` already makes for
+        # `holders` -- the list shipped uncapped and uncounted, so a cut
+        # would have been silent. `unstated` names the parts of a withheld
+        # verdict the producer did not state in a usable form (a string or
+        # non-finite operand, a missing `superseded_by`): the part is still
+        # dropped, and the row says so instead of asserting a reconciliation
+        # with nothing behind it.
+        "supersededreturned", "supersededwithheldtotal", "unstated",
+        # 2026-09-21 (delta vet K-7): `also_in_holders` marks a withheld row
+        # that is ALSO in the served list. The two lists are produced
+        # independently, so the description's "do not add these back into
+        # holders" is inert for such a row -- it is already there and the
+        # double count is already restored. The flag is the only thing that
+        # lets a reader tell that case from a cleanly withheld row, so the
+        # fail-closed filter must not strip it.
+        "also_in_holders",
     }),
 
     # PIP-ONLY. The wheel reshapes /api/insider-activity into trades[] with

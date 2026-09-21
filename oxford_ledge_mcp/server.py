@@ -93,7 +93,6 @@ if _pkg_parent not in sys.path:
     sys.path.insert(0, _pkg_parent)
 
 import logging
-import math
 from typing import Any
 
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
@@ -158,6 +157,12 @@ from oxford_ledge_mcp_core.errors import non_object_response
 from oxford_ledge_mcp_core.errors import json_type_name, non_object_tool_error
 from oxford_ledge_mcp_core.cache import _TOOL_CACHE, _CACHE_LOCK
 from oxford_ledge_mcp.meta_table import standalone_meta
+# Leaf helper, no @mcp_tool: importing it cannot move TOOL_DISPATCH.
+from oxford_ledge_mcp.holders_fold import (  # noqa: F401  (re-exported)
+    NO_FOLD as _NO_FOLD,
+    EMPTY_AFTER_FOLD_NOTE as _HOLDERS_EMPTY_AFTER_FOLD_NOTE,
+    apply_fold,
+)
 from oxford_ledge_mcp_core import (
     mcp_tool,
     MARKET,
@@ -324,8 +329,28 @@ def _with_tier_tag(name: str, description: str) -> str:
 from oxford_ledge_mcp.transport import (  # noqa: F401  (re-exports)
     _UPSTREAM_TEXT_CAP,
     _excerpt,
+    # 2026-09-21 delta-vet K-B: the NOT_FOUND relay's framing (the wheel
+    # names the subject and the code; the host's sentence is quoted as data
+    # with newlines and role-marker shapes neutralised).
+    _ROLE_MARKER_RE,
+    _HOST_PROSE_SUBSTITUTIONS,
+    _quoted_host_prose,
+    _framed_not_found,
     _is_loopback_host,
     _authenticated_request,
+    # 2026-09-19 transport-seam hardening: the faults urllib does not wrap,
+    # the success-body ceiling, the params_accepted echo bound, and the
+    # refusal-body code reader. Re-exported at the block's position like
+    # everything else, so `oxford_ledge_mcp.server.<name>` keeps resolving.
+    _TRANSPORT_FAULTS,
+    _transport_fault,
+    _SUCCESS_BODY_CAP,
+    _read_capped,
+    _ECHO_VALUE_MAX_CHARS,
+    _ECHO_WALK_MAX_DEPTH,
+    _bounded_echo_value,
+    _bound_params_accepted,
+    _body_error_code_and_message,
     _parse_json_body,
     _api_get,
     _api_error_sentence,
@@ -421,6 +446,7 @@ _HOLDERS_EMPTY_SCOPE_NOTE = (
 )
 
 
+
 # ── `_meta.derived_fields` on the two RESHAPING tools (d2-wheel-prose-3) ─────
 # The 9 REST proxies carry the route's `_meta` verbatim, and README.md defines
 # `derived_fields` as "paths in the tool's own key names". Seven of the nine
@@ -458,14 +484,85 @@ _HOLDERS_DERIVED_PATH_MAP = {
     "holders[].pct_change": None,
     "holders[].includes_sub_managers": None,
 }
-_HOLDERS_WHEEL_DERIVED = ("vintages", "rankingBasis")
+_HOLDERS_WHEEL_DERIVED = ("vintages", "rankingBasis",
+                          "holders[].stale_quarters", "superseded_parents")
+#: ONE cut for both lists. `holders` has been capped at 10 with a
+#: `completeness` disclosure since 2026-09-05; `superseded_parents` shipped
+#: uncapped and uncounted for two days, so a host could push an unbounded
+#: list of withheld rows into a model's context through the one list nobody
+#: bounded while `completeness.returned` reported the served holders only.
+_HOLDERS_ROW_CAP = 10
 
 
-def _payload_has_path(payload, path):
+def _reshape_holder_row(row):
+    """One /api/institutional-holders row in get_holders' own key names.
+
+    Used for BOTH the served `holders` list and the withheld
+    `superseded_parents` list, so a withheld row is never a different shape
+    from a served one.
+
+    Field test #3 (2026-08-10): the live rows carry fund_name / value_usd --
+    the old chain read keys this route never emits, so `holder` rendered ""
+    beside correct share counts. b03-ownership-5: `is not None`, not an or-chain -- a filed
+    value_usd of 0 is a value, and the or-chain served it as null.
+
+    `stale_quarters` is the row's distance in quarters from the payload's
+    as-of quarter (0 = current). It rides through ONLY when the producer
+    states it: the producer omits the key rather than writing 0 when either
+    quarter is unparseable, and inventing a 0 here would turn "could not be
+    dated" into "current". A bool is refused for the same reason -- `True`
+    is an int in Python and would serve as 1.
+
+    `ahead_quarters` (>= 1) is its additive companion, present only on a row
+    struck NEWER than the as-of quarter: that row keeps `stale_quarters` 0,
+    so without this key it is indistinguishable from a row AT the anchor.
+    Absent on an ordinary row, never 0.
+
+    Both counters are RANGE-guarded, not only type-guarded, and an
+    out-of-range value is DROPPED rather than clamped: the description
+    states `stale_quarters` as a distance (0 = current) and `ahead_quarters`
+    as ">= 1", so a negative distance is not a number a model can act on and
+    a clamp would invent one. Absent already means "not stated", which is
+    the honest reading of a value the producer could not have meant.
+
+    `fund_cik` rides through when the upstream row carries it, because
+    `superseded_by` is a list of fund_ciks: without the key on the served
+    rows the withheld row's attribution names identifiers that appear
+    nowhere else in the same document, and the only join left is the fund
+    NAME string.
+    """
+    out = {
+        "holder": str(row.get("fund_name") or row.get("holder")
+                      or row.get("name") or ""),
+        "shares": _safe(row.get("shares")),
+        "value": _safe(row.get("value_usd") if row.get("value_usd") is not None
+                       else row.get("value")),
+        "type": "institutional",
+    }
+    cik = row.get("fund_cik")
+    if isinstance(cik, (str, int)) and not isinstance(cik, bool) and str(cik).strip():
+        out["fund_cik"] = str(cik).strip()
+    out.update(row_vintage(row))  # T7: quarter + filingDate, when the row has them
+    for key, floor in (("stale_quarters", 0), ("ahead_quarters", 1)):
+        val = row.get(key)
+        if isinstance(val, int) and not isinstance(val, bool) and val >= floor:
+            out[key] = val
+    return out
+
+
+def _payload_has_path(payload, path, empty_rows_resolve=True):
     """True when a `derived_fields` path resolves on *payload*: `a.b` walks
-    dicts, `a[].b` walks every row of a list (an EMPTY list cannot disprove
-    the key -- README: "a path may name a key only one branch emits"), and
-    `a.*` needs `a` to be a dict."""
+    dicts, `a[].b` walks every row of a list, and `a.*` needs `a` to be a
+    dict.
+
+    `empty_rows_resolve` is the ROUTE's rule: an empty list cannot disprove
+    the key, because "a path may name a key only one branch emits" (README).
+    The wheel's OWN derivations are checked with it FALSE -- that list is an
+    assertion that this payload's values were derived here, and over zero
+    rows nothing was. Without the distinction the empty-holders branch named
+    `holders[].stale_quarters` beside `holders: []`, which is the phantom
+    path this whole block exists to stop.
+    """
     node = payload
     for seg in path.split("."):
         if seg == "*":
@@ -476,7 +573,7 @@ def _payload_has_path(payload, path):
                 return False
             rows = [r for r in node if isinstance(r, dict)]
             if not rows:
-                return True
+                return empty_rows_resolve
             node = rows[0]
             continue
         if not isinstance(node, dict) or seg not in node:
@@ -515,7 +612,8 @@ def _remap_derived_fields(meta, payload, path_map, wheel_derived,
             continue
         translated.append(q)
     for q in wheel_derived:
-        if q not in translated and _payload_has_path(payload, q):
+        if q not in translated and _payload_has_path(payload, q,
+                                                     empty_rows_resolve=False):
             translated.append(q)
     out["derived_fields"] = translated
     return out
@@ -541,23 +639,8 @@ def tool_get_holders(args):
     if not isinstance(data, dict):
         return non_object_response(ticker, "holders", "institutional holders", "/api/institutional-holders", data)
     raw = data.get("holders") or data.get("filings") or []
-    holders = []
-    for row in raw[:10]:
-        holder = {
-            # Field test #3 (2026-08-10): the live rows carry fund_name /
-            # value_usd (data/institutional_holdings.get_institutional_holders)
-            # -- the old chain read keys this route never emits, so holder
-            # rendered "" beside correct share counts.
-            "holder": str(row.get("fund_name") or row.get("holder") or row.get("name") or ""),
-            "shares": _safe(row.get("shares")),
-            # b03-ownership-5: `is not None`, not an or-chain -- a filed
-            # value_usd of 0 is a value, and the or-chain served it as null.
-            "value": _safe(row.get("value_usd") if row.get("value_usd") is not None
-                           else row.get("value")),
-            "type": "institutional",
-        }
-        holder.update(row_vintage(row))  # T7: quarter + filingDate, when the row has them
-        holders.append(holder)
+    holders = [_reshape_holder_row(row) for row in raw[:_HOLDERS_ROW_CAP]
+               if isinstance(row, dict)]
     fault = _route_fault(data, ticker, "holders", "institutional holders",
                          "/api/institutional-holders")
     out = {"ticker": ticker, "holders": holders,
@@ -571,7 +654,8 @@ def tool_get_holders(args):
                "returned": len(holders),
                "totalFetched": len(raw),
                "totalHolders": None if fault else data.get("total_holders"),
-               "complete": None if fault else ((len(raw) <= 10) if raw else True),
+               "complete": None if fault else (
+                   (len(raw) <= _HOLDERS_ROW_CAP) if raw else True),
            }}
     if fault:
         out["error"] = fault
@@ -581,6 +665,16 @@ def tool_get_holders(args):
     # quarter, else vintages[] + rankingBasis; the route's coverage block rides
     # through. The measurement and the rule: oxford_ledge_mcp_core.holders_vintage.
     out.update(holders_disclosure(holders, data))
+    # The superseded-parent fold (2026-09-19), cut to `holders_fold.py`
+    # 2026-09-21 when the K-7/K-8/K-9 fixes took this file past its
+    # 2,000-line budget. That module owns the whole shape -- what rides, what
+    # is never synthesised, what `[]` does and does not mean, and the two
+    # `completeness` corrections a non-empty withheld list forces. It is
+    # handed the row reshaper and the cap rather than importing them, so the
+    # dependency points one way and both lists stay the same shape by
+    # construction.
+    apply_fold(out, data, holders, ticker, fault, _reshape_holder_row,
+               _HOLDERS_ROW_CAP)
     # 3.4.0 vet (COUNSEL F-1 / CHAOS K-11): the reshape rebuilt the payload
     # and DROPPED the route's `_meta` -- the provenance block route_provenance
     # attaches (source / basis / terms_url). Carry it through when present so
@@ -1510,16 +1604,25 @@ def _execute_tool_with_limits(tool_name, args):
             "emit allowlist -- a packaging defect, not missing data. "
             "Report it to the package maintainer; retrying or changing "
             "arguments will not help.")
+    # CISO-D3 (3.4.0 vet), the message-bound half: every arm below interpolates
+    # an exception the HANDLER raised, and the handler's text can carry
+    # upstream content -- a 60,008-character message was measured reaching the
+    # wire from one of these. `_excerpt` is the ONE cap every other
+    # interpolation of upstream text already goes through (CISO-6); the
+    # classification each arm makes is unchanged, only the length is.
     except TimeoutError as e:
-        raise ToolError(ToolError.TIMEOUT, str(e))
+        raise ToolError(ToolError.TIMEOUT, _excerpt(str(e)))
     except ValueError as e:
-        raise ToolError(ToolError.INVALID_PARAMS, str(e))
+        raise ToolError(ToolError.INVALID_PARAMS, _excerpt(str(e)))
     except Exception as e:
+        # The PREDICATE still reads the full text: truncating before the
+        # match would let a "rate limit" past character 500 change the code
+        # a call gets, which is a behaviour change, not a bound.
         err_str = str(e).lower()
         if "rate limit" in err_str or "429" in err_str:
-            raise ToolError(ToolError.RATE_LIMITED, str(e), retry_after=60)
+            raise ToolError(ToolError.RATE_LIMITED, _excerpt(str(e)), retry_after=60)
         if "not found" in err_str or "no data" in err_str or "empty" in err_str:
-            raise ToolError(ToolError.DATA_UNAVAILABLE, str(e))
+            raise ToolError(ToolError.DATA_UNAVAILABLE, _excerpt(str(e)))
         raise
     finally:
         if heavy_acquired:
@@ -1561,7 +1664,11 @@ def _dispatch_to_content(tool_name, tool_args):
         return _wire_dumps(e.to_dict()), True
     except Exception as e:
         _log(f"Tool error ({tool_name}): {traceback.format_exc()}")
-        error_payload = {"error": {"code": "INTERNAL_ERROR", "message": str(e)}}
+        # CISO-D3: bounded like every other interpolation of text this client
+        # did not write. The full traceback is already in the log line above,
+        # which is where an operator debugging this looks; the WIRE copy is
+        # what a model reads, and it does not get 60 KB.
+        error_payload = {"error": {"code": "INTERNAL_ERROR", "message": _excerpt(str(e))}}
         return _wire_dumps(error_payload), True
 
 

@@ -5,6 +5,189 @@ All notable changes to `oxford-ledge-mcp` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.6.0 (2026-09-21)
+
+Everything under this heading landed on `main` after the 3.5.0 publish and
+ships in 3.6.0; an installed 3.5.0 has none of it. (It was carried as
+`## Unreleased` from the CISO re-seat of 2026-09-21 until the bump, because
+this CHANGELOG is GitHub-only and the installed package cannot otherwise
+learn of a security-relevant change.) OWNER greenlit the bump + publish in
+chat on 2026-09-21 after CISO, CHAOS and COUNSEL each read PUBLISH-WITH-FIXES
+and the fixes landed.
+
+**Correction, 2026-09-21.** This section previously read "Every item below is
+in the transport or cache seam; **no tool's served keys change**". That was
+false twelve minutes after it was written and is false three times over now:
+`get_holders` gained the 13F superseded-parent fold on the wire and
+`search_bdc_borrower` gained a description correction, all after the sentence
+landed. The clause is struck rather than quietly deleted, because a released
+changelog that denies the cut's largest wire change is the defect
+(delta vet K-1 / C-3). The **Added** section below is that change.
+
+### Added -- `get_holders`: the 13F superseded-parent fold reaches the wire
+
+The hosted route withholds a stale filer row from `holders` when its shares
+reconcile within 1% to same-quarter siblings of its own fund-name family (the
+Vanguard double count) and records what it withheld. The wheel's reshape
+dropped all of it, so a holders table whose fold had run was byte-identical to
+one where nothing was ever withheld. Now served, and admitted by the
+fail-closed emit allowlist:
+
+- `holders[].stale_quarters` -- the row's distance in quarters from the
+  payload's as-of anchor (0 = current). ABSENT, never 0, when the row could
+  not be dated.
+- `holders[].ahead_quarters` (>= 1) -- present only on a row struck NEWER
+  than the anchor, which keeps `stale_quarters` 0 and is otherwise
+  indistinguishable from a row AT the anchor.
+- `superseded_parents` (top level) -- the withheld rows, in the same shape as
+  a served row, each with `superseded`, `superseded_by` (the `fund_cik`s that
+  supersede it) and BOTH operands of the reconciliation,
+  `superseded_by_shares` (the sibling sum) and `reconciled_pct` (their
+  distance apart as a percentage of the withheld row's own `shares`). `[]`
+  means the fold ran and withheld nothing among the rows it could date.
+  NEVER merge these back into `holders` or any total: that restores the
+  double count the fold removes.
+- `holders[].fund_cik` and `superseded_parents[].fund_cik` -- the filer's SEC
+  CIK. Added 2026-09-21: `superseded_by` is a list of fund_ciks and no row
+  carried one, so the attribution named identifiers absent from the same
+  document.
+- `completeness.supersededReturned` / `completeness.supersededWithheldTotal`
+  -- `superseded_parents` is capped at 10 like `holders`, and the cut is
+  disclosed with both operands.
+- `superseded_parents[].unstated` -- names any part of the verdict the
+  producer did not state in a usable form (a non-numeric or non-finite
+  operand, a missing `superseded_by`). The part is dropped rather than
+  faked, and the row says so instead of asserting a reconciliation with
+  nothing behind it.
+- `superseded_parents[].also_in_holders` (2026-09-21, delta vet K-7) --
+  present only when the withheld row is ALSO in the served list. The two
+  lists are built independently, so nothing stopped the same filer appearing
+  in both, and for that row the fold did not remove the double count: the
+  advice "do not add these rows back into `holders`" is inert when the row is
+  already there. Annotated, not dropped -- the disagreement is the producer's
+  and the reader is the one who can act on it.
+- Top-level `unstated: ["superseded_parents"]` (2026-09-21, delta vet K-9) --
+  the producer sent the key in a shape this client could not read (a dict, a
+  string, an explicit `null`). It used to collapse to key-ABSENT, which is
+  exactly how a host that never folded at all renders; the marker restores the
+  one distinction the design exists to preserve. Read it as "the fold did not
+  run", never as "the fold withheld nothing".
+
+### Fixed -- `get_holders`: two sentences that were false in the fold's own headline case
+
+Delta vet K-8. Both were true before the fold existed and stopped being true
+when it landed:
+
+- `completeness.complete` read `true` beside a non-empty `superseded_parents`,
+  because it answered "was every FETCHED row returned" and the withheld rows
+  never reach the fetch. A reader asking "is this every filer?" got yes over a
+  list the producer had already reduced. It is now `false` whenever anything
+  was withheld; `supersededWithheldTotal` beside it says how much.
+- An EMPTY `holders` list beside a non-empty `superseded_parents` emitted the
+  scope note ("...not evidence that nobody holds X"), which sends a reader
+  looking for a coverage gap when the producer returned rows and the fold
+  withheld all of them. That case now gets its own sentence naming the fold
+  and pointing at the withheld rows. A genuinely empty result still gets the
+  scope note.
+
+An installed 3.5.0's fail-closed allowlist STRIPS every key above until the
+consumer upgrades; nothing it already reads changes. `MIGRATING.md` carries
+the consumer-facing list.
+
+### Fixed -- `search_bdc_borrower` description: `manual` is not an attestation
+
+The `descriptionSource` prose now enumerates all five values, names the three
+that suppress the AI-generated flag, and states that `manual` is the store's
+DEFAULT and therefore not an attestation of a human author. The label itself
+is unchanged -- it is decided producer-side for every channel.
+
+### Security
+- **Plaintext-key refusal: the loopback exemption is now an address check,
+  not a string prefix.** `OXFORD_LEDGE_URL=http://...` with
+  `OXFORD_LEDGE_API_KEY` set is refused (the key would travel in the clear)
+  unless the host parses as a loopback ADDRESS (`127.0.0.1`, `127.x.y.z`,
+  `[::1]`) or is literally `localhost`. Previously any hostname that merely
+  began with `127.` passed, so `http://127.evil.invalid/` carried the key.
+  **Config-breaking for one shorthand:** `http://127.1:...` no longer counts
+  as loopback (it is not a parseable address); write `http://127.0.0.1:...`.
+- Exceptions urllib does not wrap (`http.client.BadStatusLine`,
+  `RemoteDisconnected`, `IncompleteRead`, `OSError`, `ConnectionResetError`,
+  `socket.timeout`, `ValueError` from `urlopen`) are now caught on all three
+  request legs and reported as a bounded `DATA_UNAVAILABLE`; the seam's
+  TIMEOUT / INVALID_PARAMS / INTERNAL_ERROR arms bound the upstream text at
+  500 characters (a hostile status line could previously reach the client
+  at 60,000+ characters).
+- **Success-body ceilings, per host.** A success body over its host's
+  ceiling is refused before it is read in full -- nothing is parsed, served
+  or cached, and the refusal names the ceiling so an operator can tell it
+  from an outage. **Correction, 2026-09-21:** this line previously read "a
+  success body larger than 8 MB is refused", which described only the three
+  Oxford Ledge request legs. Four sibling reads -- SEC submissions, SEC
+  companyfacts, SEC's ticker map and FRED -- were unbounded while this
+  sentence, the constant's own comment and the vet artifact all read as
+  class-extinction (CISO reseat L-1). They are bounded now, and the ceiling
+  is PER HOST rather than one reused figure, because SEC companyfacts for a
+  large filer legitimately exceeds 8 MB (Citigroup, CIK 0000831001, measured
+  8,785,882 bytes on 2026-09-21): reusing the Oxford Ledge number would have
+  refused a correct answer for the largest filers. The numbers and the
+  measurements behind them live in `oxford_ledge_mcp_core/body_limits.py` --
+  8 MB for the operator-configurable Oxford Ledge host, 32 MB for SEC
+  companyfacts, 16 MB for SEC submissions, 8 MB for SEC's ticker map, 16 MB
+  for FRED (that last one reasoned from the document shape, not measured:
+  a keyed FRED request was out of scope).
+- `params_accepted` echoes from the host are bounded at 200 characters per
+  value on the wheel, matching the hosted bound (previously unbounded on the
+  client side). **Correction, 2026-09-21:** this line previously said "per
+  DICT value" and named a bare string or a list under that key as an
+  uncovered shape. Both were measured passing 5 KB through untouched
+  (5,046 and 5,048 characters), and both are now bounded -- a truncated
+  string states the length it truncated and a structure is replaced by its
+  type and size, so nothing is invented and nothing is amputated
+  (reseat L-2 / delta vet K-10). TWO residuals remain, deliberately: an echo
+  nested deeper than the walk goes (an uncapped walk over an untrusted body
+  is its own defect), and 5 KB under any OTHER `_meta` key (a client that
+  rewrote arbitrary host keys would be editing the host's document). Both are
+  bounded by the success-body ceiling above, and both are pinned as residuals
+  by contract, so a silent change in either direction has to be written down.
+
+### Fixed
+- FRED `series` is case-folded in the cache key, so `dgs10` and `DGS10` are
+  one entry and one upstream call.
+- The cache no longer serves the stored object itself: a consumer that
+  mutates a served payload no longer changes what the next caller receives
+  (deep copy on both store and serve).
+- **The cache has a BYTE budget, not only an entry count** (2026-09-21,
+  reseat L-3). It bounded 500 entries and nothing else, which was a fair
+  approximation while a response was ~32 KB and stopped being one the moment
+  the success-body ceiling sanctioned 8 MB per entry -- 500 of those is a
+  number no small instance survives, and an 8 MB body was traced at ~53.7 MB
+  peak resident through parse + store-copy + serve-copy. Now: at most 500
+  entries AND at most 32 MB of aggregate serialized payload, evicting
+  earliest-expiry first. A single result too large for the budget is not
+  cached at all rather than emptying the cache for itself, and the call still
+  returns normally -- a cache miss is not an error. `cache_stats()` reports
+  `bytes` and `bytes_budget`. Disclosed in the README's new
+  "Resource limits this client enforces on itself" section.
+- **A response nested deeper than the isolation copy can reach is refused by
+  NAME** (2026-09-21, reseat L-5). The deep copy added above recurses, so it
+  gives up at roughly 500 levels while the allowlist pass tolerates ~1000 and
+  the parser more still; that band used to surface as an opaque
+  `INTERNAL_ERROR` after the upstream call had already been paid for. The
+  band stays refused -- raising the interpreter's recursion limit would trade
+  a bounded refusal for a stack overflow, which kills the process rather than
+  erroring -- but the refusal now says the response is nested deeper than
+  this client will copy, that nothing was served or cached, and that it is a
+  property of the document rather than of the caller's arguments.
+- A hosted `NOT_FOUND` refusal (a permanent miss, HTTP 404 with
+  `code: "NOT_FOUND"`) surfaces as `ToolError.NOT_FOUND` carrying the host's
+  sentence, not as a dead-endpoint error. Since 2026-09-21 that sentence is
+  FRAMED on all three request legs the way every sibling branch already
+  frames an upstream string: the wheel names the subject and the code, and
+  the host's words are quoted as data, with newlines collapsed and
+  role-marker / fence shapes neutralised. It was relayed bare, which handed
+  an operator-configurable host up to 500 characters in the client's own
+  voice.
+
 ## 3.5.0 (2026-09-14)
 
 Measured against the WHEEL, as 3.4.0 was. Every wire change in this cut is

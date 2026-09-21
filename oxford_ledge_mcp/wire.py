@@ -10,9 +10,21 @@ tool or imports the server; every name is re-exported from server.py so
 * `_coerce_for_wire` / `_wire_dumps` -- K-5: NaN / Infinity never reach the
   wire (a strict client rejects the bare tokens), a Decimal / date dict KEY
   becomes str / ISO. Mirrors the hosted `_McpJSONResponse._coerce`;
-  `allow_nan=False` is the backstop. Latent today -- no wheel path produces
-  NaN or Decimal -- and closed at the seam so the next handler that does
-  cannot ship a non-JSON document.
+  `allow_nan=False` is the backstop.
+
+  **This is LOAD-BEARING, not latent.** It said "latent today -- no wheel
+  path produces NaN or Decimal", and that was wrong about the input side:
+  `json.loads` accepts the bare `NaN` / `Infinity` / `-Infinity` tokens by
+  default, so any HOST can put a non-finite float into a decoded body and a
+  proxying handler will carry it straight through. `_coerce_for_wire` turns
+  it into an explicit `null` before it can reach a strict client, which is
+  the honest option available here -- the value is not a number and this
+  client must not invent one -- and readers that need to tell "the producer
+  said nothing" from "the producer said something unusable" say so at the
+  handler (`get_holders`' `unstated` list is the worked example). Decimal
+  remains a wheel-side non-producer; the NaN half is reachable today.
+  Corrected 2026-09-21 (delta vet K-11): a comment that calls a live guard
+  latent is how the guard gets deleted as dead code in the next cut.
 * `_TransportToolError` -- critic-1: raised from the mcp-SDK `call_tool` so
   EVERY mcp 1.x flags the result isError:true; the SDK renders `str(e)` as
   the content text, so `str()` is the same JSON envelope the built-in loop

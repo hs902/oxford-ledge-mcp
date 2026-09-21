@@ -68,6 +68,8 @@ import urllib.request
 
 from oxford_ledge_mcp_core import FUNDAMENTAL, ToolError, mcp_tool, normalize_ticker
 from oxford_ledge_mcp_core.fundamentals_policy import ANNUAL_FORMS, fundamentals_refusal, taxonomy_blocks
+from oxford_ledge_mcp_core.body_limits import (
+    SEC_COMPANYFACTS_BODY_CAP, BodyTooLarge, read_capped)
 from oxford_ledge_mcp_core.split_basis import (
     apply_basis_gate, basis_gate_report, filed_values_by_year)
 # b01-sec-standalone-5: the SAME guard + resolver get_sec_filings uses, so a
@@ -329,7 +331,16 @@ def tool_get_fundamentals(args):
     req = urllib.request.Request(facts_url, headers={"User-Agent": _SEC_UA})
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            raw = resp.read()
+            # Bounded since 2026-09-21 (CISO reseat L-1). This is the one
+            # read in the package whose LEGITIMATE payload exceeds the
+            # transport's 8 MB Oxford Ledge ceiling -- Citigroup's
+            # companyfacts document measured 8,785,882 bytes on 2026-09-21 --
+            # which is exactly why the ceiling is per-host and named rather
+            # than one figure reused everywhere.
+            raw = read_capped(resp, SEC_COMPANYFACTS_BODY_CAP,
+                              f"SEC EDGAR's {api}")
+    except BodyTooLarge as e:
+        raise ToolError(ToolError.DATA_UNAVAILABLE, str(e))
     except urllib.error.HTTPError as e:
         if e.code == 404:
             via = (f" (resolved from ticker '{ticker}')" if not ticker.isdigit() else "")
