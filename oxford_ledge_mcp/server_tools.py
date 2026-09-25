@@ -183,7 +183,15 @@ TOOLS = [
             "flag) are served ONCE, as the amendment, with supersedesAccession naming the folded "
             "original -- so summing shares or value over the list no longer double-counts an "
             "amended filing. A 4/A that CORRECTED a value is a different line and is served "
-            "beside its original; isAmendment says which is which. [Requires API mode]"
+            "beside its original; isAmendment says which is which. Each row also carries "
+            "issuerSelfFiled: true when the Form 4 was filed under the company's own SEC ID (the "
+            "reporting-owner CIK equals the issuer's CIK), so the reporting-owner field names the "
+            "company rather than a person -- the filing's footnotes may still name the officer. "
+            "Oxford Ledge lists these rows but never counts them in its own buy/sell summaries, "
+            "net figures or insider clusters; leave them out when you total the list. false "
+            "whenever either CIK is missing (never a guess). The key is ABSENT (not false) when "
+            "the Oxford Ledge server that answered does not send it (a host older than this "
+            "package): read that as unknown. [Requires API mode]"
         )),
         "inputSchema": {
             "type": "object",
@@ -471,13 +479,30 @@ TOOLS = [
             "USD, latest filing), filingDate, lastParsed, plus the "
             "reconciliation triple reportedTotalFairValue (the filing's OWN "
             "stated grand total), fairValueBasis ('parsed-rows' or "
-            "'filing-reported') and parsedRowSumFairValue, and the refusal pair "
-            "fairValueRefused / fairValueRefusalReason. READ fairValueBasis "
-            "BEFORE using totalFairValue: when a parse over-counts, "
+            "'filing-reported') and parsedRowSumFairValue, the refusal pair "
+            "fairValueRefused / fairValueRefusalReason, and the gap label "
+            "fairValueGap / fairValueGapNote. READ fairValueBasis BEFORE "
+            "using totalFairValue, and fairValueGap with it: when a parse over-counts, "
             "totalFairValue is swapped to the filing-reported figure and the "
             "raw row sum is preserved in parsedRowSumFairValue, so the two "
             "disagreeing numbers are both visible rather than silently "
-            "reconciled. When the store does not answer, holdingCount is null "
+            "reconciled (a parse recovering under half the filed total is "
+            "swapped the same way); when it UNDER-counts by more than 5% but "
+            "recovers at least half, totalFairValue stays the parsed-row sum -- "
+            "every dollar of it a served row -- and UNDERSTATES the book, which "
+            "only fairValueGap says. fairValueGap is null (the two agree within "
+            "5%, or cannot be compared) | 'rows_under_reported' | "
+            "'rows_over_reported' | 'funded_basis_presentation' (a measured "
+            "funded-basis filer, today FSK: its schedule reports FUNDED amounts "
+            "above a headline net of unfunded commitments -- a presentation "
+            "difference, not an over-count), and fairValueGapNote states the "
+            "measured ratio in one sentence. reportedTotalFairValue is null, "
+            "never 0, in TWO cases: the filing tags no usable grand total, or "
+            "Oxford Ledge's stored reference describes a DIFFERENT filing than "
+            "the book served, so it cannot reconcile -- a null reference carries "
+            "no swap, no gap label and no refusal. lastParsed is the date Oxford "
+            "Ledge last wrote this BDC's registry row (a repair counts), not the "
+            "filing date; null when that read failed. When the store does not answer, holdingCount is null "
             "(never a measured 0) and a top-level `notice` says the counts were "
             "not measured. holdingCount, totalFairValue and the arbitration are "
             "Oxford Ledge's parse, not filer-published figures; ticker / name / "
@@ -548,9 +573,20 @@ TOOLS = [
             "filing-reported figure, `reportedTotalFairValue` is that figure, "
             "`parsedRowSumFairValue` is the raw row sum, `fairValueRefusalReason` says why, and "
             "every row-derived aggregate (totalParAmount, weightedAvgPrice, topIndustries, "
-            "portfolioStructure) is null with `holdingsReconciled: false`. `totalHoldings` is the "
+            "portfolioStructure) is null with `holdingsReconciled: false`. `fairValueGap` / "
+            "`fairValueGapNote` carry the gap label get_bdc_list serves (null | "
+            "'rows_under_reported': the parsed-row total UNDERSTATES the book, use "
+            "reportedTotalFairValue for its size | 'rows_over_reported' | "
+            "'funded_basis_presentation', FSK's funded-amount schedule, not an over-count) with "
+            "the measured ratio in one sentence. `reportedTotalFairValue` is null, never 0, when "
+            "the filing tags no usable grand total OR when Oxford Ledge's stored reference "
+            "describes a DIFFERENT filing than the book served (cannot reconcile: no swap, no gap "
+            "label, no refusal). `totalHoldings` is the "
             "REGISTRY count of parsed positions (the population the totals and percentages "
-            "cover); the served `holdings` list may be SHORTER because rows whose borrower cell "
+            "cover) -- except that when the stored registry row describes a different filing "
+            "than the newest book whose rows are served, filingType, periodEnd and totalHoldings "
+            "are RECOMPUTED from the served rows, so the header always describes the rows "
+            "beneath it; the served `holdings` list may be SHORTER because rows whose borrower cell "
             "carries no issuer identity are dropped at read -- `holdingsReturned`, "
             "`nonBorrowerRowsExcluded` and `excludedRowsFairValue` disclose the gap so you can "
             "reconcile served rows against the header. parseQuality 'ok' | 'suspect' (suspect "
@@ -719,14 +755,28 @@ TOOLS = [
     {
         "name": "get_value_investing_fact",
         "description": (
-            "A value-investing quote, principle, or historical fact from "
-            "Oxford Ledge's curated corpus (~2,000 entries: Buffett, Graham, "
-            "Munger, Klarman and others) with its citation. Returns a flat fact: "
-            "{quote, author, source (the book, letter or speech), source_year, "
-            "category, subcategory, era, difficulty}. The corpus and its "
-            "classification are Oxford Ledge-authored (basis ol-authored); the "
-            "quotations are their authors'. Cached 24h per argument set -- vary "
-            "`category` for a different pick. [Requires API mode]"
+            "A value-investing principle, historical fact or attributed "
+            "paraphrase from Oxford Ledge's curated corpus (~2,000 entries about "
+            "Buffett, Graham, Munger, Klarman and others). THE WORDING IS NOT "
+            "VERIFIED against the primary source: most entries paraphrase or "
+            "summarise the named author's ideas, some may repeat the author's "
+            "own words, and none is a verbatim quotation unless `verbatim` is "
+            "true -- so never present the text as the author's exact words. "
+            "Returns a flat fact: {quote, author, source (the book, letter or "
+            "speech), source_year, category, subcategory, era, difficulty, "
+            "verbatim, attribution} -- the text is in the `quote` key (a field "
+            "name, not a claim that the words are the author's), `author` is "
+            "whose ideas it concerns, `verbatim` is true only for an entry "
+            "verified against its primary source (false for every entry today), "
+            "and `attribution` is the credit line to use when you repeat the "
+            "text (it names the author, the source and the year and says the "
+            "text is not a verbatim quotation; a historical-record entry is "
+            "credited as an Oxford Ledge summary of its source). The corpus, its "
+            "selection and its classification are Oxford Ledge's (basis "
+            "ol-authored); the ideas, and any words that are the author's own, "
+            "belong to the named author, credited through `attribution`. Cached "
+            "24h per argument set -- vary `category` for a different pick. "
+            "[Requires API mode]"
         ),
         "inputSchema": {
             "type": "object",
@@ -749,14 +799,30 @@ TOOLS = [
         "name": "ol_bdc_top_borrowers",
         "description": (
             "MOAT / BDC discovery: the private-credit borrowers syndicated "
-            "across the MOST BDCs, ranked by lender count then exposure -- the "
+            "across the MOST BDCs, ranked by ACTIVE lender count "
+            "(holder_count_active), then holder_count, then exposure -- a "
+            "wound-down filer and its successor holding one book no longer "
+            "rank a borrower as two lenders (when the filer roster cannot be "
+            "read, the ranking falls back to holder_count) -- the "
             "entrypoint for the BDC/private-credit category no generic MCP "
             "touches. Pairs with `ol_bdc_borrower_dispersion` (feed a returned "
             "`borrower_norm` into it to see cross-lender pricing). Returns "
             "{summary, count, borrowers}; each row is {borrower (display name), "
             "borrower_norm (the key other ol_bdc_* tools take), holder_count "
-            "(distinct BDC lenders), total_fair_value (whole USD across "
-            "lenders, latest filings; null when unpriced), industry}. Caps: "
+            "(distinct BDC lenders; a wound-down filer's frozen last filing "
+            "still counts -- read holder_count_active / holder_count_ever, "
+            "summed over holder_ticker_status, for the present-tense split), "
+            "total_fair_value (whole USD across "
+            "lenders, latest filings; null when unpriced), industry}. A row "
+            "whose industry label was checked also carries `industry_basis` "
+            "{stored_label_chosen_by ('row_count', or "
+            "'rollup_differs_from_row_count' when the stored label no longer "
+            "matches the fresh row-count vote -- it may be stale), "
+            "by_fair_value, fair_value_agreement, distinct_industries, "
+            "contested (true when the lenders' row-count and fair-value votes "
+            "disagree, OR when the served `industry` disagrees with either -- "
+            "a stale stored label is contested even when the lenders agree)}. "
+            "Caps: "
             "limit default 25 / hard 100; min_holders default 2 (max 50). "
             "Parser mis-ingests (subtotals, maturity-date and instrument-"
             "descriptor rows, bare industry-taxonomy labels) are filtered out "
@@ -965,7 +1031,7 @@ TOOLS = [
     },
     {
         "name": "ol_insider_recent_buys",
-        "description": "Recent OPEN-MARKET insider PURCHASES across the Oxford Ledge issuer catalog (~5.3k tickers) -- a daily insider screen. Returns {summary, since_days, count, buys}; each buy is {ticker, filingDate, transactionDate, insiderName, position, title, transType, shares, pricePerShare, totalValue, sharesOwned, securityTitle, isDerivative, url (SEC filing)}, NEWEST FIRST. since_days default 30 (hard cap 180), limit default 25 (hard cap 100). SAMPLING TRAP: when the window holds more purchases than `limit`, you get the NEWEST N filings, not the whole window -- so never total these rows and call it the period's insider buying. Open-market purchases only (SEC transaction_code 'P'); option exercises, grants and sales are excluded, as are issuers filing on themselves. `totalValue` is USD (dollars, with cents) = |shares| x price, computed by Oxford Ledge at ingest and null when the filed price failed the plausibility gate; `position` is the filer's reported title, or an Oxford Ledge fallback label (Officer / Director / 10% Owner / Insider) when the filing left it blank -- both are Oxford Ledge derivations (basis hybrid); every other field is the Form 4's. Source: SEC EDGAR Form 4 (public domain); FREE (no paywall on the hosted channel). Pairs with get_insider_trades (one ticker). Multi-buyer cluster detection is hosted-only. Each row also carries formType (the Form 4 type as filed, '4' or '4/A'), accessionNumber (the filing), isAmendment (true for a 4/A; null when the store holds no form type), and supersedesAccession: a Form 4 and its 4/A that report the SAME line (identical filer, date, code, shares, price, shares-owned-after, security title and derivative flag) are served ONCE, as the amendment, with supersedesAccession naming the folded original -- so summing shares or value over the list no longer double-counts an amended filing. A 4/A that CORRECTED a value is a different line and is served beside its original; isAmendment says which is which. [Requires API mode]",
+        "description": "Recent OPEN-MARKET insider PURCHASES across the Oxford Ledge issuer catalog (~5.3k tickers) -- a daily insider screen. Returns {summary, since_days, count, buys}; each buy is {ticker, filingDate, transactionDate, insiderName, position, title, transType, shares, pricePerShare, totalValue, sharesOwned, securityTitle, isDerivative, url (SEC filing)}, NEWEST FIRST. since_days default 30 (hard cap 180), limit default 25 (hard cap 100). SAMPLING TRAP: when the window holds more purchases than `limit`, you get the NEWEST N filings, not the whole window -- so never total these rows and call it the period's insider buying. Open-market purchases only (SEC transaction_code 'P'); option exercises, grants and sales are excluded, as are issuers filing on themselves. `totalValue` is USD (dollars, with cents) = |shares| x price, computed by Oxford Ledge at ingest and null when the filed price failed the plausibility gate; `position` is the filer's reported title, or an Oxford Ledge fallback label (Officer / Director / 10% Owner / Insider) when the filing left it blank -- both are Oxford Ledge derivations (basis hybrid); every other field is the Form 4's. Source: SEC EDGAR Form 4 (public domain); FREE (no paywall on the hosted channel). Pairs with get_insider_trades (one ticker). Multi-buyer cluster detection is hosted-only. Each row also carries formType (the Form 4 type as filed, '4' or '4/A'), accessionNumber (the filing), isAmendment (true for a 4/A; null when the store holds no form type), and supersedesAccession: a Form 4 and its 4/A that report the SAME line (identical filer, date, code, shares, price, shares-owned-after, security title and derivative flag) are served ONCE, as the amendment, with supersedesAccession naming the folded original -- so summing shares or value over the list no longer double-counts an amended filing. A 4/A that CORRECTED a value is a different line and is served beside its original; isAmendment says which is which. Each row also carries issuerSelfFiled (Oxford Ledge's comparison of the filer's and the issuer's SEC IDs, not a Form 4 field); expect false here, because purchases filed under the issuer's own SEC ID are excluded from this screen -- a true row is one that exclusion missed, so leave it out of any total. [Requires API mode]",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -985,7 +1051,7 @@ TOOLS = [
     },
     {
         "name": "get_fails_to_deliver",
-        "description": "SEC fails-to-deliver history for one ticker -- the settlement-failure side of short pressure. Returns {ticker, days, history, count}; each row is {date (the SETTLEMENT date, as ISO text -- the field is `date`, not settlement_date), fails (SHARES failed, not dollars), price (closing price that day, USD), description (issue name)}, OLDEST-FIRST so it charts left to right. `days` is a trailing window, default 180, hard cap 730, ANCHORED TO THE LATEST LOADED SETTLEMENT DATE (`as_of`), not to today: each SEC half-month file lands ~3 weeks after the period ends, so a window measured back from today was empty for every ticker on most days of the month; the served span ends at `as_of` and `coverage.window_start` / `coverage.window_end` say where it ran. Coverage is sparse by nature: SEC publishes a row only on days a ticker actually had fails, so gaps between rows are normal -- but the STORE holds only the SEC half-month files Oxford Ledge has loaded, so an empty or thin `history` is a statement about the loaded settlement-date range, not evidence of no fails: a `days` window that reaches before the earliest loaded file is empty by construction. THE COVERAGE FLOOR rides every payload: `coverage` = {earliest_settlement_date, latest_settlement_date, files_loaded, files_expected, files_missing (the SEC half-month file labels absent INSIDE the loaded range, e.g. 202608b -- a gap there is a missing file, not a fail-free stretch; null if the store could not list its periods), window_start, window_end, days_covered, days_before_earliest, days_after_latest, window_predates_coverage, window_postdates_coverage (true when the window starts after the newest loaded date OR at least one whole half-month after it lies inside the window)}, `as_of` (the latest settlement date loaded) and a `summary` that states how many of the requested days fall inside the loaded data and names the head, the tail and the missing files as NOT LOADED rather than fail-free -- when none of the window is loaded it says so instead of \"0 fails\" -- read them before quoting a window as fail-free. Figures are as SEC published for that settlement date: NOT split-adjusted, and a renamed ticker's earlier rows sit under the old symbol; class shares use SEC's concatenated symbol (BRKB), which BRK.B / BRK-B also match. The short-interest half of that picture is hosted-only. Source: SEC Fails-to-Deliver dataset (published twice monthly, ~3-week lag). [Requires API mode]",
+        "description": "SEC fails-to-deliver history for one ticker -- the settlement-failure side of short pressure. Returns {ticker, days, history, count}; each row is {date (the SETTLEMENT date, as ISO text -- the field is `date`, not settlement_date), fails (SHARES failed, not dollars), price (closing price that day, USD), description (issue name)}, OLDEST-FIRST so it charts left to right. `days` is a trailing window, default 180, hard cap 730, ANCHORED TO THE LATEST LOADED SETTLEMENT DATE (`as_of`), not to today: each SEC half-month file lands ~3 weeks after the period ends, so a window measured back from today was empty for every ticker on most days of the month; the served span ends at `as_of` and `coverage.window_start` / `coverage.window_end` say where it ran. Coverage is sparse by nature: SEC publishes a row only on days a ticker actually had fails, so gaps between rows are normal -- but the STORE holds only the SEC half-month files Oxford Ledge has loaded, so an empty or thin `history` is a statement about the loaded settlement-date range, not evidence of no fails: a `days` window that reaches before the earliest loaded file is empty by construction. THE COVERAGE FLOOR rides every payload: `coverage` = {earliest_settlement_date, latest_settlement_date, files_loaded, files_expected, files_missing (the SEC half-month file labels absent INSIDE the loaded range, e.g. 202608b -- a gap there is a missing file, not a fail-free stretch; null if the store could not list its periods), window_start, window_end, days_covered, days_before_earliest, days_after_latest, window_predates_coverage, window_postdates_coverage (true when the window starts after the newest loaded date OR at least one whole half-month after it lies inside the window)}, `as_of` (the latest settlement date loaded) and a `summary` that states how many of the requested days fall inside the loaded data and names the head, the tail and the missing files as NOT LOADED rather than fail-free -- when none of the window is loaded it says so instead of \"0 fails\" -- read them before quoting a window as fail-free. Figures are as SEC published for that settlement date: NOT split-adjusted, and a renamed ticker's earlier rows sit under the old symbol; one row per ticker and settlement date -- where SEC lists more than one CUSIP under a symbol on a date (a CUSIP change with both securities failing), `fails` is the SUM across those CUSIPs and `price` / `description` follow the CUSIP with the larger fails; class shares use SEC's concatenated symbol (BRKB), which BRK.B / BRK-B also match. The short-interest half of that picture is hosted-only. Source: SEC Fails-to-Deliver dataset (published twice monthly, ~3-week lag). [Requires API mode]",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1137,7 +1203,7 @@ TOOLS = [
     },
     {
         "name": "ol_bdc_mark_changes",
-        "description": "MOAT / private credit: the largest quarter-over-quarter MARK moves across a SET of BDC portfolios -- 'which borrowers got marked up or down the most last quarter, and by whom' in ONE deterministic call. Built because the alternative is stitching it by hand: a model asked this question fanned out per-BDC calls, worked from portfolio AVERAGES (the wrong grain), hit a rate limit, and fabricated a row by copying another BDC's numbers. Returns {increases, decreases}, each a global ranking across every portfolio supplied; each row is {borrower, portfolio (the BDC ticker holding it), prior_mark, latest_mark, mark_delta, prior_filing, latest_filing}. Marks are PERCENT OF PAR, fair-value-weighted across all tranches the BDC holds of that borrower; mark_delta is in percentage points. INCLUSION THRESHOLDS: a borrower enters a ranking only when |mark_delta| >= 1.0 point and its fair value is >= $500k, so 'no moves' can hide sub-point drifts and tiny positions. Grain is BORROWER, not position: security_type is deliberately NOT returned, because rolling up across tranches is what stops a continuously-held borrower reading as both entered and exited when its tranche mix is re-parsed. Each BDC is read at ITS two most recent filings and BDCs file on different calendars, so rows MIX vintages -- read `as_of` before treating the moves as contemporaneous. `coverage` names every BDC that was and was NOT read, with a reason per exclusion (no_prior_quarter / no_parsed_holdings / query_failed / over_ticker_cap), so a partial sweep can never read as a complete one. Caps: bdc_tickers truncated at 25 (the excess is listed in coverage, not dropped silently), limit default 10 / hard 50 per direction. Source: SEC 10-K/10-Q schedules of investments (Oxford Ledge parse); FREE (no paywall on the hosted channel). ATTRIBUTION: Oxford Ledge's parse of SEC EDGAR BDC schedules of investments (ol-derived), not a filer-published series. [Requires API mode]",
+        "description": "MOAT / private credit: the largest quarter-over-quarter MARK moves across a SET of BDC portfolios -- 'which borrowers got marked up or down the most last quarter, and by whom' in ONE deterministic call. Built because the alternative is stitching it by hand: a model asked this question fanned out per-BDC calls, worked from portfolio AVERAGES (the wrong grain), hit a rate limit, and fabricated a row by copying another BDC's numbers. Returns {increases, decreases}, each a global ranking across every portfolio supplied; each row is {borrower, portfolio (the BDC ticker holding it), prior_mark, latest_mark, mark_delta, prior_filing, latest_filing}. Marks are PERCENT OF PAR, fair-value-weighted across all tranches the BDC holds of that borrower; mark_delta is in percentage points. INCLUSION THRESHOLDS: a borrower enters a ranking only when |mark_delta| >= 1.0 point and its fair value is >= $500k, so 'no moves' can hide sub-point drifts and tiny positions. Grain is BORROWER, not position: security_type is deliberately NOT returned, because rolling up across tranches is what stops a continuously-held borrower reading as both entered and exited when its tranche mix is re-parsed. Each BDC is read at ITS two most recent filings and BDCs file on different calendars, so rows MIX vintages -- read `as_of` before treating the moves as contemporaneous. `coverage` names every BDC that was and was NOT read, with a reason per exclusion (no_prior_quarter / no_parsed_holdings / query_failed / over_ticker_cap / fair_value_refused -- the last when that BDC's latest book is refused against a reference coherent with it, the same fairValueRefused get_bdc_list carries, so its marks are not ranked), so a partial sweep can never read as a complete one. Caps: bdc_tickers truncated at 25 (the excess is listed in coverage, not dropped silently), limit default 10 / hard 50 per direction. Source: SEC 10-K/10-Q schedules of investments (Oxford Ledge parse); FREE (no paywall on the hosted channel). ATTRIBUTION: Oxford Ledge's parse of SEC EDGAR BDC schedules of investments (ol-derived), not a filer-published series. [Requires API mode]",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1159,7 +1225,7 @@ TOOLS = [
     },
     {
         "name": "ol_bdc_credit_quality",
-        "description": "BDC non-accrual credit-deterioration signal: the share of debt fair value on non-accrual (loans that stopped paying) in the latest filing, plus the trailing-quarter trend -- the earliest public read on a private-credit book going bad. Returns {summary, ticker, latest, trend}. `latest` = {filing_date, flagged_fv, determinate_fv, total_debt_fv, flagged_pct, flagged_pct_basis (the denominator sentence), determinate_coverage}; the envelope also carries `filer_status` ('active'|'inactive') and `successor_ticker` -- an INACTIVE filer's frozen final filing is labelled in `summary` (BKCC -> TCPC); `trend` is per-quarter OLDEST-FIRST with the same fields plus quarter_key. UNITS: the *_fv figures are whole USD of fair value, flagged_pct is a percentage number, determinate_coverage is a 0-1 fraction. DENOMINATOR: flagged_pct = flagged_fv / determinate_fv x 100 -- the DETERMINATE-flag denominator (the rows whose non-accrual status the parse could read), never total_debt_fv; multiply it by determinate_coverage for the share of the whole debt book, which is up to 10% lower relative at the 90% gate. `flagged_pct` is deliberately NULL whenever determinate coverage is under 90% of debt fair value -- a partially-determinate quarter never reports a rate computed over a fraction of the book, so treat null as 'withheld', never as zero. `quarters` default 12, hard cap 24. Unparsed or non-BDC tickers return latest=null, trend=[]. Pairs with ol_bdc_borrower_dispersion and ol_bdc_top_borrowers. Source: SEC EDGAR BDC schedule-of-investments non-accrual flags (Oxford Ledge parse); FREE (no paywall on the hosted channel). ATTRIBUTION: Oxford Ledge's parse of SEC EDGAR BDC schedules of investments (ol-derived), not a filer-published series. `latest.coverage_state` and every trend row's `coverage_state` is one of `none_parsed` (0% determinate: no non-accrual flag was parsed from the filing -- a parser gap, not a withholding and not a 0% rate), `partial` (0-90% determinate: the rate is withheld and the sentence carries the coverage number) or `covered` (>= 90%: the rate is stated). Read the state before reading a null flagged_pct. [Requires API mode]",
+        "description": "BDC non-accrual credit-deterioration signal: the share of debt fair value on non-accrual (loans that stopped paying) in the latest filing, plus the trailing-quarter trend -- the earliest public read on a private-credit book going bad. Returns {summary, ticker, latest, trend}. `latest` = {filing_date, flagged_fv, determinate_fv, total_debt_fv, flagged_pct, flagged_pct_basis (the denominator sentence), determinate_coverage}; the envelope also carries `filer_status` ('active'|'inactive') and `successor_ticker` -- an INACTIVE filer's frozen final filing is labelled in `summary` (BKCC -> TCPC); `trend` is per-quarter OLDEST-FIRST with the same fields plus quarter_key. UNITS: the *_fv figures are whole USD of fair value, flagged_pct is a percentage number, determinate_coverage is a 0-1 fraction. DENOMINATOR: flagged_pct = flagged_fv / determinate_fv x 100 -- the DETERMINATE-flag denominator (the rows whose non-accrual status the parse could read), never total_debt_fv; multiply it by determinate_coverage for the share of the whole debt book, which is up to 10% lower relative at the 90% gate. `flagged_pct` is deliberately NULL whenever determinate coverage is under 90% of debt fair value -- a partially-determinate quarter never reports a rate computed over a fraction of the book, so treat null as 'withheld', never as zero. `quarters` default 12, hard cap 24. Unparsed or non-BDC tickers return latest=null, trend=[]. Pairs with ol_bdc_borrower_dispersion and ol_bdc_top_borrowers. Source: SEC EDGAR BDC schedule-of-investments non-accrual flags (Oxford Ledge parse); FREE (no paywall on the hosted channel). ATTRIBUTION: Oxford Ledge's parse of SEC EDGAR BDC schedules of investments (ol-derived), not a filer-published series. `latest.coverage_state` and every trend row's `coverage_state` is one of `none_parsed` (0% determinate: no non-accrual flag was parsed from the filing -- a parser gap, not a withholding and not a 0% rate), `partial` (0-90% determinate: the rate is withheld and the sentence carries the coverage number), `covered` (>= 90%: the rate is stated), `unusually_high` (coverage passed and the rate IS stated, but more than 25% of determinate debt fair value carries a non-accrual flag WITHOUT the misread signature below -- the flagged loans marked under 85 per 100 of par, or no mark on file to test -- unusually high, check the filing before relying on it) or `implausible` (coverage passed, more than 25% is flagged AND the flagged loans are marked near par -- their aggregate mark is at or above 85 per 100 of par, while a loan a lender has stopped accruing on is marked down -- a sign our parse misread the schedule, so the rate is withheld and the raw flagged_fv / determinate_fv sums stay on the row for inspection; `summary` states the mark). Read the state before reading flagged_pct. `latest` and every trend row also carry `withheld` ('implausible_flag_rate' when that misread test is what nulled the rate, else null -- the coverage gate keeps its own expression, determinate_coverage below 0.9) and `parser_dialect_version` (the OLDEST parser-generation stamp among the filing's rows, null for unstamped history: a quarter stamped below the trend's newest version has not been re-read by the newer parser, and `summary` names the span when the trend mixes versions). [Requires API mode]",
         "inputSchema": {
             "type": "object",
             "properties": {

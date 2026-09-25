@@ -315,6 +315,13 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # and meaning to the get_bdc_holdings entry below
         "reportedtotalfairvalue", "fairvaluebasis", "parsedrowsumfairvalue",
         "fairvaluerefused", "fairvaluerefusalreason",
+        # 3.7.1 (MCP audit 2026-09-24 finding 6; CHAOS
+        # 2026-09-24_CHAOS_bdc_plausibility_gates.md "fold-in"): the arbiter's
+        # under / over / funded-basis LABEL and its sentence. Same lineage as
+        # the admitted refusal pair -- Oxford Ledge's arithmetic over the SEC
+        # row sum and the filing's own total. Without it a TCPC-shaped 0.73
+        # under-count reached anonymous and pip callers with nothing saying so.
+        "fairvaluegap", "fairvaluegapnote",
     }),
     "get_bdc_holdings": frozenset({
         # 2026-09-13 wave G (external live review of 3.4.0): the keys the wave's
@@ -336,6 +343,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # in the transport rather than in the producer.
         "reportedtotalfairvalue", "fairvaluebasis", "parsedrowsumfairvalue",
         "fairvaluerefused", "fairvaluerefusalreason",
+        # 3.7.1: the same gap label + sentence as get_bdc_list above (one
+        # arbiter, one vocabulary on both BDC tools).
+        "fairvaluegap", "fairvaluegapnote",
         # holdings rows (query_by_bdc's clean_holdings projection)
         "borrowername", "industry", "securitytype", "lienposition",
         "interestrate", "maturitydate", "paramount", "costamount",
@@ -558,6 +568,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         "pricepershare", "securitytitle", "shares", "sharesowned",
         "since_days", "title", "totalvalue", "transactiondate",
         "transtype", "url",
+        # 3.7.1 (65ef9275): the same issuer-self-filed label the feed serves;
+        # always false on this screen (its WHERE already drops those rows).
+        "issuerselffiled",
     }),
 
     # `sec_ftd`. COUNSEL flagged that the STORE holds CUSIP
@@ -761,6 +774,12 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # denominator sentence on the `latest` block (flagged_fv / DETERMINATE fv,
         # never total_debt_fv) and the inactive-filer label.
         "flagged_pct_basis", "filer_status", "successor_ticker",
+        # 3.7.1 (MCP audit 2026-09-24 finding 1): the machine-readable reason
+        # an otherwise-covered rate is null ('implausible_flag_rate', beside
+        # coverage_state 'implausible') and the parser generation that read
+        # the quarter's flags (the oldest row stamp) -- on `latest` and on
+        # every trend row. Oxford Ledge's own gate and parse provenance.
+        "withheld", "parser_dialect_version",
     }),
 
     # ── CISO F5, 2026-09-12: the nine wheel tools that rode no emit filter ──
@@ -928,6 +947,13 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # source_year, category, subcategory, era, difficulty; `source` is an
         # envelope key) were already here. Oxford Ledge-authored corpus.
         "facts",
+        # 3.7.1 (MCP audit 2026-09-24 finding 10; CHAOS
+        # 2026-09-24_CHAOS_edgar_text_audit_fixes.md): the row's boolean for
+        # whether the text is a verified verbatim quotation (false for every
+        # entry today -- the texts are Oxford Ledge's paraphrases).
+        # `attribution` already rides _ENVELOPE_KEYS; without this key an
+        # anonymous or pip caller saw "Paraphrasing ..." but not the flag.
+        "verbatim",
     }),
 
     # PLUS-GATED. RE-SEEDED 2026-09-12 (3.4.0 vet b04-events-capital-1/-2/
@@ -1081,6 +1107,12 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # empty-branch scope sentence) does NOT -- measured stripped on the
         # first cut -- so it is admitted here.
         "securitytitle", "isderivative", "note",
+        # 3.7.1 (OWNER 2026-09-24 T-1 ruling, 65ef9275; CHAOS
+        # 2026-09-24_CHAOS_serve_honesty.md addendum): true when the Form 4
+        # was filed under the issuer's own CIK. The reshape passes it through
+        # only when the host sent it -- absent means an older host (unknown),
+        # never false. Oxford Ledge's comparison of two as-filed CIKs.
+        "issuerselffiled",
     }),
 
     # PIP-ONLY. The wheel builds this from SEC's submissions API itself:

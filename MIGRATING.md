@@ -110,6 +110,145 @@ Include in your bug report:
    (`OXFORD_LEDGE_URL` set or not).
 5. `pip show oxford-ledge-mcp | grep Version` so we know which release.
 
+## 3.7.1 — six keys the host already sends now pass the emit filter, `get_insider_trades` carries `issuerSelfFiled`, and eight descriptions are corrected to the wire
+
+Cut 2026-09-25, after the 3.7.0 publish the same day; an installed 3.7.0 has
+none of the package-side changes below. **No tool, argument, schema bound or
+key is renamed or removed, and this client sends nothing new.** Everything in
+the package is additive: a reader that ignores keys it does not know sees no
+difference except the description text.
+
+### Six keys admitted by the fail-closed emit filter (additive)
+
+The package filters every payload through a per-tool allowlist and DROPS any
+key it does not recognise -- so a key the Oxford Ledge server started sending
+after a release is stripped until the next release admits it. 3.7.1 admits
+six (lowercased in the table; they arrive in the host's own spelling):
+
+| tool | keys | what they say |
+|---|---|---|
+| `get_bdc_list`, `get_bdc_holdings` | `fairValueGap`, `fairValueGapNote` | a label (`rows_under_reported` / `rows_over_reported` / `funded_basis_presentation`, or null) plus one sentence whenever Oxford Ledge's parsed-row total and the filing's own total differ by more than 5% |
+| `ol_bdc_credit_quality` | `withheld`, `parser_dialect_version` | on `latest` and every trend row: `'implausible_flag_rate'` when the misread test nulled the rate (more than 25% flagged AND the flagged loans marked near par), and the oldest parser-generation stamp among the quarter's rows |
+| `get_value_investing_fact` | `verbatim` | true only for a text verified against its primary source; false for every entry today |
+| `get_insider_trades`, `ol_insider_recent_buys` | `issuerSelfFiled` | true when the Form 4 was filed under the company's own SEC ID; always false on `ol_insider_recent_buys`, which excludes those purchases |
+
+- **Before (3.7.0):** a BDC whose parsed rows recovered 73% of the filing's own
+  total came back with `fairValueBasis: "parsed-rows"`, a `totalFairValue` that
+  understates the book by a quarter, and nothing saying so; an
+  `ol_bdc_credit_quality` quarter read `coverage_state: "implausible"` with
+  `flagged_pct: null` and no reason code; an issuer-self-filed Form 4 row read
+  like any officer's trade.
+- **After (3.7.1):** the same payloads carry the label, the reason code and
+  the flag.
+- **What to do:** read `fairValueGap` beside `fairValueBasis` before quoting a
+  BDC's size -- on `rows_under_reported` the size of the book is
+  `reportedTotalFairValue`, not `totalFairValue`; leave rows with
+  `issuerSelfFiled: true` out of any insider buy/sell total (Oxford Ledge
+  never counts them in its own summaries, net figures or clusters); repeat a
+  value-investing text with its `attribution` line, not as a quotation.
+- **The hosted server changes too.** The hosted `/mcp` route applies this same
+  allowlist table to ANONYMOUS callers, so the six keys reach anonymous hosted
+  callers from the next Oxford Ledge deploy, independent of this publish.
+
+### `get_insider_trades`: `issuerSelfFiled` on each row (additive)
+
+The reshape of `/api/insider-activity` now passes the row's `issuerSelfFiled`
+through as the host sent it. When the host does NOT send it -- an Oxford Ledge
+server older than the 2026-09-24 change -- the key is ABSENT from the row,
+never `false`: read absence as "unknown". The route declares the key an
+Oxford Ledge derivation, so when it is present `_meta.derived_fields` also
+lists `trades[].issuerSelfFiled`.
+
+### Descriptions corrected to the wire (no schema change)
+
+- **`get_value_investing_fact`**: the entries' wording is not verified against
+  the primary source -- most paraphrase or summarise the named author's ideas,
+  some may repeat the author's own words -- so none is a verbatim quotation
+  unless `verbatim` is true; `attribution` is the credit line to use. The
+  description no longer calls the text a "quote" or says the quotations are
+  their authors'. The `quote` KEY keeps its name, and `quote` stays a valid
+  `category` value.
+- **`ol_bdc_credit_quality`**: `coverage_state` has two new values.
+  `implausible`: more than 25% of determinate debt fair value flagged AND the
+  flagged loans marked near par (their aggregate mark at or above 85 per 100
+  of par, while a loan a lender has stopped accruing on is marked down) -- a
+  sign the parse misread the schedule, so the rate is withheld.
+  `unusually_high`: more than 25% flagged WITHOUT that signature -- the rate
+  is stated, and `summary` says "unusually high -- check the filing". The
+  description names `withheld` and `parser_dialect_version`.
+- **`get_bdc_list` / `get_bdc_holdings`**: name `fairValueGap` /
+  `fairValueGapNote`; state the two cases in which `reportedTotalFairValue` is
+  null; say what `lastParsed` is; say that `get_bdc_holdings`' header is
+  recomputed from the served rows when the stored registry row describes
+  another filing.
+- **`get_insider_trades` / `ol_insider_recent_buys`**: name `issuerSelfFiled`
+  (on the screen: Oxford Ledge's comparison of two SEC IDs, expected `false`
+  because the screen excludes those purchases; a `true` row is one the
+  exclusion missed).
+- **`ol_bdc_top_borrowers`**: ranked by the ACTIVE lender count, then
+  `holder_count`, then exposure; `industry_basis` and its `contested` flag are
+  described (a stale stored label counts as contested).
+- **`ol_bdc_mark_changes`**: the `coverage` exclusion reasons include
+  `fair_value_refused`.
+
+### Host-side changes the descriptions now state (an installed 3.7.0 sees these too)
+
+These are Oxford Ledge server changes of 2026-09-24/25. They arrive as VALUES
+under keys 3.7.0 already passes, so upgrading the package is not what brings
+them; 3.7.1 is what describes them.
+
+- **`reportedTotalFairValue` is null, never 0, in two cases** on `get_bdc_list`
+  and `get_bdc_holdings`: the filing tags no usable grand total, OR Oxford
+  Ledge's stored reference describes a different filing than the book served
+  (it cannot reconcile). A null reference carries no swap, no gap label and no
+  refusal.
+- **`get_bdc_list`'s `lastParsed`** is the date Oxford Ledge last wrote the
+  BDC's registry row (a repair counts), no longer the filing date.
+- **`get_bdc_holdings`' `periodEnd` / `totalHoldings` / `filingType`** are
+  recomputed from the served rows when the stored registry row names another
+  filing (previously the registry's values, which described that other filing).
+- **MRCC has left `get_bdc_list`.** Monroe Capital merged into HRZN
+  (2026-04-14); MRCC is archived with successor HRZN, and `get_bdc_holdings`
+  for it serves the frozen final filing labelled `filerStatus: "inactive"`,
+  `successorTicker: "HRZN"`. `get_bdc_list` now returns 48 BDCs.
+- **`ol_bdc_mark_changes`' `filters.debt_mark_band_pts` is `[30.0, 105.0]`**
+  (it was `[30.0, 110.0]` when 3.7.0 was cut and is described that way below):
+  a prior or latest mark in (105, 110] is now held in `suspect_moves` with
+  `reason: "prior_or_latest_outside_debt_band"` instead of ranked. Its
+  `fair_value_refused` screen judges a book only against a reference coherent
+  with it.
+- **`ol_bdc_top_borrowers`** ranks on `holder_count_active`, so a wound-down
+  filer and its successor holding one book no longer count as two lenders;
+  `holder_count` itself is unchanged.
+- **`ol_bdc_credit_quality` withholds a rate only on evidence of a misread**
+  (OWNER ruling 2026-09-25). Before: any rate above 25% of determinate debt
+  fair value was withheld as `implausible`. After: only when the flagged
+  loans are ALSO marked near par (aggregate mark >= 85 of 100); a rate above
+  25% on marked-down loans, or with no mark to test, is stated with
+  `coverage_state: "unusually_high"` and "unusually high -- check the
+  filing" in `summary`, which also states the flagged loans' mark. What to
+  do: treat `unusually_high` as a stated rate that needs the filing checked
+  before you rely on it; a client that reads `flagged_pct` only on `covered`
+  skips it rather than misstating it. An Oxford Ledge host older than the
+  2026-09-25 release (a self-hosted instance not yet updated) still withholds
+  every rate above 25% as `implausible`, whatever the mark, and never sends
+  `unusually_high`; the description is of the host from that release on.
+- **`get_value_investing_fact`'s `_meta.source` and each row's
+  `attribution`** say the wording is not verified against the source and is
+  not a verbatim quotation. (A draft of this release called the whole corpus
+  "Oxford Ledge's own wording"; the publish vet found entries that are the
+  author's own sentences -- the 1989 Berkshire letter's "wonderful company at
+  a fair price" line is one -- and corrected it before the publish.)
+- **`get_fails_to_deliver` is one row per ticker and settlement date.** SEC's
+  files are per CUSIP; where a symbol appears under two CUSIPs on one date
+  (a CUSIP change with both securities failing), `fails` is the SUM across
+  them and `price` / `description` follow the CUSIP with the larger fails.
+  Before 2026-09-25 such a pair made the whole half-month file fail to load
+  (five files were missing from the store); once Oxford Ledge reloads them
+  with the fixed loader, a window that reaches into those periods has rows it
+  did not have, and until then `coverage.files_missing` still names them.
+  What to do: nothing on the client; read `coverage.files_missing` as before.
+
 ## 3.7.0 — the REST-path tools name themselves to the host, three additive `_meta` / row keys, new optional arguments on `get_bdc_holdings` and `get_fails_to_deliver`, the loopback exemption ignores `http_proxy`, and two FRED series stop serving
 
 Cut 2026-09-24 (it was `## Unreleased` until the bump); an installed 3.6.0
@@ -265,7 +404,8 @@ additive output changes and one value correction on the hosted-leg BDC tools:
 - **`ol_bdc_mark_changes`: `suspect_moves` (top level, additive) and three
   new `filters` keys.** A move of more than `filters.max_abs_mark_delta_pts`
   (15) points in one quarter, a `latest_mark` of exactly 100.00, or a mark
-  outside `filters.debt_mark_band_pts` ([30.0, 110.0]) is now held in
+  outside `filters.debt_mark_band_pts` ([30.0, 110.0] at this cut; the host
+  narrowed it to [30.0, 105.0] on 2026-09-24 -- see 3.7.1) is now held in
   `suspect_moves` with a `reason` code instead of being ranked in
   `increases` / `decreases`. Rows have the ranked-row shape plus `reason`;
   `filters.suspect_reasons` maps each code to a sentence, and

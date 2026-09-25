@@ -5,6 +5,173 @@ All notable changes to `oxford-ledge-mcp` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.7.1 (2026-09-25)
+
+Everything under this heading landed on `main` after the 3.7.0 publish
+(2026-09-25) and ships in 3.7.1; an installed 3.7.0 has none of the
+package-side changes. **Cut 2026-09-25.** The publish waited on a CISO +
+COUNSEL + CHAOS publish vet of this cut (2026-09-25), which read
+PUBLISH-AFTER-FIXES on the condition that the Oxford Ledge server release
+carrying these keys was deployed first; its corrections are in this cut
+(*Corrected at the publish vet*, the last item under *Changed --
+descriptions*).
+
+**Why a patch release.** Three reviewed changes merged on the Oxford Ledge
+server after the 3.7.0 cut put keys on the wire that this package's
+fail-closed emit filter strips, and changed what several descriptions should
+say. The sources are the CHAOS reviews of 2026-09-24/25 (BDC plausibility
+gates; the BDC parse-registry integration; the EDGAR text-audit fixes; the
+serve-honesty addendum on the issuer-self-filed Form 4 ruling).
+
+**What 3.7.1 changes, by kind.** Nothing is renamed or removed; no argument,
+schema bound or outbound request changes. Six keys are admitted by the emit
+filter (additive); one reshape passes a key through (additive, absent when
+the host does not send it); eight descriptions are corrected to the wire; the
+README and the package summary stop calling the value-investing corpus
+"quotations".
+
+### Added -- six keys admitted by the fail-closed emit filter
+
+The keys below were already on the hosted wire; 3.7.0 dropped them at its
+emit boundary (`oxford_ledge_mcp_core/emit_allowlist.py`, which DROPS any
+key a tool's allowlist does not name).
+
+- **`get_bdc_list`, `get_bdc_holdings`: `fairValueGap` / `fairValueGapNote`**
+  (MCP audit 2026-09-24, finding 6). A closed-vocabulary label --
+  `rows_under_reported`, `rows_over_reported` or `funded_basis_presentation`
+  (FSK's funded-amount schedule, a presentation difference, not an
+  over-count), null when the parsed-row total and the filing's own total agree
+  within 5% or cannot be compared -- plus one sentence stating the ratio. It
+  is the only field that says when a mild under-count leaves `totalFairValue`
+  (the parsed-row sum) UNDERSTATING the book: the swap to the filing's total
+  is one-sided by design and fires only on an over-count or a parse that
+  recovers under half the book. Lineage: Oxford Ledge's arithmetic over the
+  SEC row sum and the filing's own total, the same as the admitted refusal
+  pair.
+- **`ol_bdc_credit_quality`: `withheld` / `parser_dialect_version`** on
+  `latest` and every trend row (finding 1). `withheld` is
+  `'implausible_flag_rate'` when the misread test (more than 25% of
+  determinate debt fair value flagged AND the flagged loans marked near par,
+  at or above 85 per 100 -- OWNER ruling 2026-09-25) is what nulled a rate
+  that coverage would have allowed -- the host's `coverage_state`
+  `implausible`, which 3.7.0 already passed, now arrives with its reason;
+  `parser_dialect_version` is the oldest parser-generation stamp among the
+  quarter's rows.
+- **`get_value_investing_fact`: `verbatim`** (finding 10). True only for a
+  text verified against its primary source; false for every entry today.
+  `attribution` already passed as an envelope key, so 3.7.0 callers saw
+  "Paraphrasing ..." without the boolean.
+- **`get_insider_trades`, `ol_insider_recent_buys`: `issuerSelfFiled`**
+  (OWNER ruling 2026-09-24: label the issuer's own Form 4 on lists, exclude it
+  from counts). True when the reporting-owner CIK equals the issuer's CIK --
+  the filing's owner field names the company, not a person. Always false on
+  `ol_insider_recent_buys`, whose screen already excludes those purchases.
+- **The hosted server changes at its next deploy, independently of this
+  publish.** The hosted `/mcp` route imports this same table for ANONYMOUS
+  callers, so the six keys reach anonymous hosted callers when the Oxford
+  Ledge server next deploys.
+
+### Changed -- `get_insider_trades` passes `issuerSelfFiled` through
+
+The reshape of `/api/insider-activity` copies the row's `issuerSelfFiled`
+as the host sent it. A host that does not send it (older than 2026-09-24)
+leaves the key ABSENT -- never coerced to `false`, because "not the company's
+own filing" is a claim an older host never made. The route declares the key
+an Oxford Ledge derivation, so `_meta.derived_fields` lists
+`trades[].issuerSelfFiled` whenever it is present. 3.7.0 served the same rows
+unlabelled.
+
+### Changed -- descriptions (no schema change)
+
+- `get_value_investing_fact`: the entries' wording is not verified against
+  the primary source -- most paraphrase or summarise the named author's ideas,
+  some may repeat the author's own words -- so none is a verbatim quotation
+  unless `verbatim` is true; `verbatim` and `attribution` are in the field
+  list, with `attribution` as the credit line to use. "Quote" and "the
+  quotations are their authors'" are gone (the `quote` key and the `quote`
+  category value keep their names).
+- `ol_bdc_credit_quality`: `coverage_state` is one of `none_parsed` /
+  `partial` / `covered` / `unusually_high` / `implausible`; `withheld` and
+  `parser_dialect_version` are described. `implausible` is the misread
+  signature (more than 25% flagged AND the flagged loans marked near par);
+  `unusually_high` is a rate above 25% that is STATED, with "unusually high
+  -- check the filing".
+- `get_bdc_list` / `get_bdc_holdings`: `fairValueGap` / `fairValueGapNote`;
+  `reportedTotalFairValue` is null for two reasons (no usable filed total, or
+  a stored reference that describes a different filing than the book served);
+  `lastParsed` is the date Oxford Ledge last wrote the BDC's registry row;
+  `get_bdc_holdings`' header (`filingType`, `periodEnd`, `totalHoldings`) is
+  recomputed from the served rows when the registry row describes another
+  filing.
+- `get_insider_trades` / `ol_insider_recent_buys`: `issuerSelfFiled`.
+- `ol_bdc_top_borrowers`: ranked by the ACTIVE lender count
+  (`holder_count_active`), then `holder_count`, then exposure; `industry_basis`
+  and its `contested` flag described, including a stale stored label.
+- `ol_bdc_mark_changes`: the `coverage` exclusion reasons include
+  `fair_value_refused`.
+- README (the PyPI page): the corpus is "attributed paraphrases", not
+  "attributed quotations"; the BDC count is the 48 active BDCs `get_bdc_list`
+  serves (it said 54, an older parse-universe count); the tool table names the
+  new keys. `pyproject.toml`'s summary says "value-investing corpus of
+  attributed paraphrases", not "quotation corpus".
+- **Corrected at the publish vet (2026-09-25): the corpus is UNVERIFIED, not
+  "Oxford Ledge's own wording".** The cut described every entry as Oxford
+  Ledge's own wording. Some entries are the author's own sentences -- the
+  1989 Berkshire Hathaway letter's "It's far better to buy a wonderful company
+  at a fair price than a fair company at a wonderful price." is in the corpus
+  word for word -- so that claimed authorship of a third party's words. The
+  description, the README and the host's `attribution` / `_meta.source`
+  lines now say the wording is not verified against the source; every entry
+  still reads as not a verbatim quotation, and the ideas stay credited to the
+  named author. `ol_insider_recent_buys` now calls `issuerSelfFiled` Oxford
+  Ledge's comparison of two SEC IDs (not a Form 4 field) and says to expect
+  `false`, rather than promising it always is.
+
+### Host-side changes an installed 3.7.0 also sees
+
+These arrive as values under keys 3.7.0 already passes; 3.7.1 describes them.
+
+- `reportedTotalFairValue` is null, never 0, when Oxford Ledge's stored
+  reference describes a different filing than the book served (ARCC's registry
+  row had been re-written by a 2023 filing's parse); the gap label and the
+  refusal then stay off.
+- `get_bdc_list`'s `lastParsed` is the registry-row write date, not the filing
+  date.
+- MRCC (Monroe Capital, merged into HRZN 2026-04-14) has left `get_bdc_list`;
+  it is archived with successor HRZN.
+- `ol_bdc_mark_changes`: `filters.debt_mark_band_pts` is `[30.0, 105.0]` (the
+  3.7.0 entry below says 30-110, true when it was cut), so a mark in
+  (105, 110] is held in `suspect_moves`; the `fair_value_refused` screen uses
+  only a reference coherent with the latest book.
+- `ol_bdc_top_borrowers` ranks on the active lender count.
+- `ol_bdc_credit_quality` withholds a non-accrual rate only on evidence of a
+  misread (OWNER ruling 2026-09-25): above 25% of determinate debt fair value
+  AND the flagged loans' aggregate mark at or above 85 per 100 of par. A rate
+  above 25% on marked-down loans (or with no mark to test) is now STATED, with
+  `coverage_state` `unusually_high` and "unusually high -- check the filing" in
+  `summary`; `summary` also states the flagged loans' mark. A 3.7.0 install
+  receives the new state value too (a value, not a key) -- a client that reads
+  `flagged_pct` only when `coverage_state` is `covered` will skip these rates
+  rather than misstate them. An Oxford Ledge host older than the 2026-09-25
+  release (a self-hosted instance not yet updated) still withholds every rate
+  above 25% as `implausible`, whatever the mark, and never sends
+  `unusually_high`; this description is of the host from that release on.
+- `get_value_investing_fact`'s `_meta.source` and each row's `attribution`
+  say the wording is not verified against the source and is not a verbatim
+  quotation (earlier host builds said "the quoted words are the named
+  author's"; a draft of this release said "Oxford Ledge's own wording" --
+  both were wrong, in opposite directions).
+- `get_fails_to_deliver` serves one row per ticker and settlement date. SEC's
+  files are per CUSIP, so a symbol can appear twice on one date (a CUSIP
+  change with both securities failing); until 2026-09-25 that pair made the
+  whole half-month file fail to load, and five files were missing. From the
+  2026-09-25 host release, `fails` on such a date is the SUM across the
+  symbol's CUSIPs, and `price` / `description` follow the CUSIP with the
+  larger fails; a repeated identical line replaces, never doubles. The
+  description says so. The five missing files appear only once Oxford Ledge
+  reloads them with the fixed loader; until then `coverage.files_missing`
+  still names them.
+
 ## 3.7.0 (2026-09-24)
 
 Everything under this heading landed on `main` after the 3.6.0 publish
@@ -169,7 +336,8 @@ the wire did not say, it now says:
   `filters.max_abs_mark_delta_pts` (15 points) in one quarter, a `latest_mark`
   of exactly 100.00 (fair value equal to par to the cent -- the commitment-
   total shape, not a priced loan) or a prior/latest mark outside
-  `filters.debt_mark_band_pts` (30-110, percent of par) now lands in a new
+  `filters.debt_mark_band_pts` (30-110, percent of par, at this cut; the
+  host narrowed it to 30-105 on 2026-09-24 -- see 3.7.1) now lands in a new
   top-level `suspect_moves` list, each row in the same shape as a ranked row
   plus a `reason` from a closed vocabulary (`mark_at_par_exactly`,
   `delta_exceeds_threshold`, `prior_or_latest_outside_debt_band`;

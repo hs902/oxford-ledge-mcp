@@ -865,13 +865,13 @@ def tool_get_insider_trades(args):
             "securityTitle": row.get("securityTitle"),
             "isDerivative": row.get("isDerivative"),
             "url": row.get("url"),
-            # G2 F10 (2026-09-13): the read-side fold's labels -- see
-            # pg_db/queries/form4_dedupe.py. NULL isAmendment means the store
-            # holds no form type, never "not amended".
+            # G2 F10 fold labels (form4_dedupe.py; NULL isAmendment = no form type). 3.7.1
+            # (65ef9275): issuerSelfFiled passes through, ABSENT (never False) from an older host.
             "isAmendment": row.get("isAmendment"),
             "accessionNumber": row.get("accessionNumber"),
             "supersedesAccession": row.get("supersedesAccession"),
             "formType": row.get("formType"),
+            **({"issuerSelfFiled": row["issuerSelfFiled"]} if "issuerSelfFiled" in row else {}),
         })
     fault = _route_fault(data, ticker, "trades", "insider transactions",
                          "/api/insider-activity")
