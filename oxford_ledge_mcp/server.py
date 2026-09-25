@@ -156,6 +156,10 @@ from oxford_ledge_mcp_core.holders_vintage import holders_disclosure, row_vintag
 from oxford_ledge_mcp_core.errors import non_object_response
 from oxford_ledge_mcp_core.errors import json_type_name, non_object_tool_error
 from oxford_ledge_mcp_core.cache import _TOOL_CACHE, _CACHE_LOCK
+# 2026-09-21 (external live review of 3.6.0): the response-size measurement
+# for the REST-path tools (report, never trim) and the cache-hit marker.
+from oxford_ledge_mcp_core.response_budget import RESPONSE_BUDGET_CHARS, attach_response_size
+from oxford_ledge_mcp_core.cache import cache_lookup as _cache_lookup_core, mark_served_from_cache
 from oxford_ledge_mcp.meta_table import standalone_meta
 # Leaf helper, no @mcp_tool: importing it cannot move TOOL_DISPATCH.
 from oxford_ledge_mcp.holders_fold import (  # noqa: F401  (re-exported)
@@ -187,6 +191,16 @@ _CACHE_TTL_NEVER = NEVER
 def _cache_get(tool_name, args):
     """Return cached result if valid, else None."""
     return _cache_get_core(
+        tool_name, args, lambda n: _TOOL_TTL.get(n, _CACHE_TTL_MARKET)
+    )
+
+
+def _cache_lookup(tool_name, args):
+    """(cached result, age in seconds) if valid, else None -- the seam's
+    read since 2026-09-21, so a replay can be MARKED (`_meta.served_from_cache`
+    + `cache_age_seconds`). `_cache_get` stays for callers that want the bare
+    value."""
+    return _cache_lookup_core(
         tool_name, args, lambda n: _TOOL_TTL.get(n, _CACHE_TTL_MARKET)
     )
 
@@ -338,6 +352,11 @@ from oxford_ledge_mcp.transport import (  # noqa: F401  (re-exports)
     _framed_not_found,
     _is_loopback_host,
     _authenticated_request,
+    # 2026-09-21 loopback proxy leak: the no-environment-proxy opener the
+    # key-carrying plain-http (loopback) legs open through, and the open()
+    # that routes a request to it or to urlopen.
+    _LOOPBACK_OPENER,
+    _open_authenticated,
     # 2026-09-19 transport-seam hardening: the faults urllib does not wrap,
     # the success-body ceiling, the params_accepted echo bound, and the
     # refusal-body code reader. Re-exported at the block's position like
@@ -351,7 +370,7 @@ from oxford_ledge_mcp.transport import (  # noqa: F401  (re-exports)
     _bounded_echo_value,
     _bound_params_accepted,
     _body_error_code_and_message,
-    _parse_json_body,
+    _parse_json_body, _MCP_TOOL_HEADER, _CURRENT_TOOL,
     _api_get,
     _api_error_sentence,
     _OL_ATTRIBUTION,
@@ -394,15 +413,15 @@ def _route_fault(data, ticker, key, noun, path):
     """The reshaping handlers' third error vocabulary (3.4.0 vet
     b03-ownership-1, BLOCK; CISO/COUNSEL/CHAOS co-signed).
 
-    /api/institutional-holders answers HTTP 200 with
-    `{"ticker", "holders": [], "error": "PostgreSQL not available"}`
-    (data/institutional_holdings.py:1255) and with `str(e)` of a swallowed
-    helper exception -- a statement timeout, measured on this very route
-    (:1453); options_insiders.py:639-640 wraps both in JSONResponse(200), so
-    `_api_get`'s status ladder never fires. `tool_get_holders` rebuilt its
-    payload from `holders` alone, dropped the route's `error`, and served
-    `holders: []` with `complete: true` -- a backend outage cached for 3600s
-    as the FACT "this issuer has no institutional holders".
+    A host answers a failed read one of two ways; a wheel meets either. (1)
+    HTTP 200 wrapping it -- `{"ticker", "holders": [], "error": "PostgreSQL
+    not available"}`, or a swallowed exception's text (a statement timeout
+    was measured) -- which `_api_get`'s status ladder never sees; the handler
+    once served that as `holders: []` + `complete: true`, an outage cached for
+    3600s as the FACT "no institutional holders". THIS function is that arm.
+    (2) HTTP 503 + Retry-After never reaches here: `_api_get`'s 503 arm raises
+    DATA_UNAVAILABLE carrying `retry_after`, and a raised error is never
+    cached. Both stay handled -- an installed wheel outlives any one host.
 
     Returns the sentence to ship as the payload's `error` (a plain string:
     the same RETURNED vocabulary as `non_object_response`, never raised, so
@@ -1026,11 +1045,27 @@ def tool_get_bdc_borrower_mark_history(args):
 def tool_get_bdc_holdings(args):
     # 2026-09-05 external field test: the package could find a borrower
     # (search_bdc_borrower) and list BDCs (get_bdc_list) but had no
-    # entity->portfolio read. Proxies the existing /api/bdc/holdings
-    # route (its only parameter is `ticker`).
+    # entity->portfolio read. Proxies the existing /api/bdc/holdings route.
+    #
+    # 2026-09-22 (OWNER ruling on the 3.6.0 external review, Pattern-T T11a/
+    # T14): `limit` / `offset` FORWARDED to the route, which now takes them.
+    # Forwarded rather than sliced here -- the opposite of search_bdc_borrower,
+    # whose route takes only `q`, so a forwarded bound would be dropped
+    # silently. Paging at the producer also means the wheel never holds the
+    # whole book in memory to hand back a window of it.
+    #
+    # DECLARED-ONLY, and that is the property that matters: a call passing
+    # neither parameter sends neither on the query string, so an installed
+    # 3.6.0 reader gets the byte-for-byte wire it got before. Bounds are
+    # refused at the seam from this tool's own schema `minimum`/`maximum`
+    # (never clamped), and the route refuses them again with a 422.
     ticker = normalize_ticker(args.get("ticker"))
+    params = {"ticker": ticker}
+    for name in ("limit", "offset"):
+        if args.get(name) is not None:
+            params[name] = int(args[name])
     return filter_to_allowlist(
-        "get_bdc_holdings", _api_get("/api/bdc/holdings", {"ticker": ticker}))
+        "get_bdc_holdings", _api_get("/api/bdc/holdings", params))
 
 
 # ── 2026-09-05 moat promotion: three BDC name-proxies ────────────────────────
@@ -1493,6 +1528,56 @@ def _validate_args_against_schema(tool_name, args):
                             f"Input validation error: `{pname}`: {v!r} is too long")
 
 
+def _declares_param(tool_name, param):
+    """True iff the advertised inputSchema for *tool_name* declares *param*
+    -- read from the SAME `TOOLS` list the validator reads, so the size hint
+    names `limit` only for a tool a caller can actually pass it to."""
+    schema = next((t.get("inputSchema") or {} for t in TOOLS if t.get("name") == tool_name), {})
+    return isinstance(schema, dict) and param in (schema.get("properties") or {})
+
+
+# The tools whose handler reaches the host over a REST route (`_api_get`),
+# stated EXPLICITLY. The wheel's first cut classified this set at runtime by
+# reading each handler's source for the `_api_get(` marker; that is the
+# dispatch-seam contract's rule and belongs at TEST time -- `inspect.getsource`
+# needs the .py file findable from the process's cwd, and the first CI run
+# after the cut raised `OSError: could not get source code` inside the seam
+# contracts' child process, which the dispatcher then served as
+# `ESCAPED:OSError` on every REST call. A runtime decision must not depend on
+# source files being present. The contract asserts this set equals the
+# rule-derived one, so it cannot drift silently.
+_REST_PATH_TOOLS = frozenset((
+    "get_13f_holdings", "get_bdc_borrower_mark_history", "get_bdc_holdings",
+    "get_bdc_list", "get_corporate_events", "get_holders",
+    "get_insider_trades", "get_value_investing_fact", "search_bdc_borrower",
+))
+
+
+def _rest_path_tools():
+    """The tools whose handler reaches the host over a REST route -- the ones
+    that call `_api_get`. These are the tools no dispatcher ever measured: the
+    route runs no `_execute_tool_with_limits` on the host, and until
+    2026-09-21 the wheel's seam attached nothing. The name-proxies
+    (`_api_tool_call`) inherit the host's measurement; the four standalone
+    tools carry the table `_meta` and are out of scope. Explicit set (see the
+    comment above); `_rest_path_tools_by_rule` is the test-time derivation."""
+    return _REST_PATH_TOOLS
+
+
+def _rest_path_tools_by_rule():
+    """TEST-TIME ONLY: the same set derived from the live registry by the
+    dispatch-seam contract's rule. Reads source, so never called on a request
+    path."""
+    import inspect
+    # Spelled as a join so the wire contract's route-literal scan (it reads
+    # every quoted path passed to the REST proxy) does not read this marker
+    # as a route.
+    marker = "_api_get" + "("
+    return frozenset(
+        name for name, fn in TOOL_DISPATCH.items()
+        if marker in inspect.getsource(fn))
+
+
 def _carries_error(result):
     """K-3 (ii): a dict result whose `error` says something is an HONEST
     answer to serve and a WRONG thing to cache -- 26 of 29 tools replayed a
@@ -1532,9 +1617,14 @@ def _execute_tool_with_limits(tool_name, args):
             f"{json_type_name(args)}.")
     _validate_args_against_schema(tool_name, args)
 
-    cached = _cache_get(tool_name, args)
-    if cached is not None:
-        return cached
+    hit = _cache_lookup(tool_name, args)
+    if hit is not None:
+        # CACHE MARKER (2026-09-21, external live review of 3.6.0): a replay
+        # was returned unmarked, so an agent could not tell a 3,600-second-old
+        # answer from a fresh read. The marker rides a COPY -- the cached
+        # entry stays as stored, so its age is measured, never accumulated.
+        cached, age_seconds = hit
+        return mark_served_from_cache(cached, age_seconds)
 
     is_heavy = tool_name in _MCP_HEAVY_TOOLS
 
@@ -1545,6 +1635,7 @@ def _execute_tool_with_limits(tool_name, args):
             retry_after=30,
         )
 
+    _tool_tok = _CURRENT_TOOL.set(tool_name)
     heavy_acquired = False
     try:
         if is_heavy:
@@ -1586,6 +1677,21 @@ def _execute_tool_with_limits(tool_name, args):
         # seam (15/29 tools shipped bare); a blank counts as absent (K-8),
         # and BEFORE _cache_set.
         result = _attach_disclosure(result)
+        # RESPONSE SIZE, REST PATH ONLY (2026-09-21, external live review of
+        # 3.6.0): `get_bdc_holdings` for a mid-sized BDC was ~118,000 chars
+        # and was never measured on either side -- its handler reaches the
+        # host over a REST route (`_api_get`), which runs no dispatcher. The
+        # name-proxied tools (`_api_tool_call`) already carry the HOST's
+        # `_meta.response_size` through the envelope frame and are not
+        # measured twice; the four standalone tools cross no host and keep
+        # their table `_meta`. Measured on the FILTERED payload with the
+        # disclosure on it (what ships), BEFORE _cache_set so a replay carries
+        # it. It REPORTS; it never trims -- that is the recorded design on
+        # both surfaces (oxford_ledge_mcp_core.response_budget).
+        if tool_name in _rest_path_tools():
+            result = attach_response_size(
+                tool_name, result, budget_chars=RESPONSE_BUDGET_CHARS,
+                has_limit=_declares_param(tool_name, "limit"))
         # K-3 (ii): served, honestly; never replayed from the cache.
         if not _carries_error(result):
             _cache_set(tool_name, args, result)
@@ -1625,6 +1731,7 @@ def _execute_tool_with_limits(tool_name, args):
             raise ToolError(ToolError.DATA_UNAVAILABLE, _excerpt(str(e)))
         raise
     finally:
+        _CURRENT_TOOL.reset(_tool_tok)
         if heavy_acquired:
             _mcp_heavy_semaphore.release()
         _mcp_semaphore.release()

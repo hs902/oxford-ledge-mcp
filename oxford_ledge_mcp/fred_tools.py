@@ -76,6 +76,25 @@ it was changed:
     and validated before the probe; a 200 non-object body is a worded
     DATA_UNAVAILABLE, not a raw traceback.
 
+REDISTRIBUTION ROSTERS (2026-09-22). `get_fred_data` takes a CALLER-SUPPLIED
+series id, and until this date the only licensing control on it in this
+package was a DENYLIST -- a twelve-id hard deny plus a word match over FRED's
+own notes text. A denylist cannot surface the series nobody has looked at, and
+that argument bears harder on a package a third party installs than on a
+service its author operates. So this file now carries BOTH halves of the main
+repository's redistribution decision, copied because the wheel is stdlib-only
+and may not import it:
+  * `_FRED_KNOWN_THIRDPARTY` -- the hard deny, now equal to that repository's
+    refused roster (MORTGAGE30US and AAA joined it: both were named over
+    there, neither was on any denylist, and both have a non-government
+    copyright holder).
+  * `_FRED_RESALE_ALLOWLIST` -- the reviewed public-domain clearance, 40 ids
+    each with a named U.S.-federal publisher.
+Both copies are pinned against the originals by a contract in the main
+repository, in both directions, so a roster that grows on one side and not the
+other is a red rather than a silent divergence. What did NOT change: an id on
+neither roster is still decided by FRED's metadata, exactly as before.
+
 stdlib + oxford_ledge_mcp_core only; ships in the wheel
 (tools/export_mcp_package.py collects it; the manifest contract pins it).
 """
@@ -676,6 +695,59 @@ _FRED_KNOWN_THIRDPARTY = frozenset({
     "SP500",      # S&P Dow Jones Indices LLC (refused on title today; the title is not ours)
     "DJIA",       # S&P Dow Jones Indices LLC
     "NASDAQCOM",  # Nasdaq OMX Group (CV-5: served when the notes carry no copyright line)
+    # -- 2026-09-22: the two ids the main repository's `FRED_RESALE_REFUSED`
+    #    roster records that this file did not. Both are NAMED in that
+    #    repository, neither was on any denylist, and both have a
+    #    non-government copyright holder -- the exact state a publisher
+    #    denylist over a caller-supplied id cannot surface. Refusing them here
+    #    costs one frozenset entry and removes the dependence on FRED's notes
+    #    text happening to carry a licensor word.
+    "MORTGAGE30US",  # Freddie Mac (Primary Mortgage Market Survey) -- a GSE, not
+                     # a U.S. Government work under 17 USC 105
+    "AAA",           # Moody's (Seasoned Aaa Corporate Bond Yield)
+})
+#: CLEARED FOR REDISTRIBUTION -- the reviewed public-domain roster, COPIED from
+#: the main repository's `FRED_RESALE_SERIES_ALLOWLIST` (2026-09-22) because the
+#: wheel is stdlib-only and may not import it. Every id below carries a named
+#: U.S.-federal publisher and a recorded public-domain rationale over there; the
+#: publishers are the comment headings here. The main repository's wheel-roster
+#: contract AST-reads that literal and pins this set against it in BOTH
+#: directions, so the two copies cannot drift the way this file's deny roster
+#: and the in-tree Board roster once did.
+#:
+#: WHAT IT DOES, precisely, and what it deliberately does NOT do:
+#:   * it CLEARS. An id here serves when the metadata probe is unavailable (the
+#:     `_FRED_GOV_PREFIXES` fallback is a prefix heuristic and misses eight of
+#:     these: JTSJOL, PCE, PSAVERT, TOTALSA, PERMIT, DGORDER, ICSA, DTWEXBGS),
+#:     and the marker regex cannot refuse it -- a reviewed entry naming a
+#:     federal statistical program outranks a word match over FRED's free text,
+#:     which is the same false-positive class the 2026-09-13 anchoring fix
+#:     closed for MIUR / KSRUSS0URN.
+#:   * it does NOT become the only way to serve. An id that is neither here nor
+#:     on the hard-deny roster is still decided by the probe, exactly as before.
+#:     Enumerating every public-domain FRED series is not possible -- FRED
+#:     carries 800k+ -- so a fail-closed-to-this-roster `get_fred_data` would
+#:     refuse most of the U.S. statistical system to save the tail this probe
+#:     already covers. The residual is named in the changelog rather than
+#:     hidden: for an id outside both rosters this package still runs a
+#:     denylist over FRED's own notes.
+_FRED_RESALE_ALLOWLIST = frozenset({
+    # -- U.S. Bureau of Labor Statistics --
+    "CPIAUCSL", "CPILFESL", "UNRATE", "PAYEMS", "JTSJOL", "PPIACO",
+    # -- U.S. Bureau of Economic Analysis --
+    "GDP", "GDPC1", "PCE", "PCEPILFE", "PSAVERT", "TOTALSA",
+    # -- U.S. Census Bureau --
+    "HOUST", "PERMIT", "DGORDER", "RSAFS",
+    # -- U.S. Employment and Training Administration --
+    "ICSA",
+    # -- Board of Governors of the Federal Reserve System --
+    "DGS1MO", "DGS3MO", "DGS6MO", "DGS1", "DGS2", "DGS3", "DGS5", "DGS7",
+    "DGS10", "DGS20", "DGS30", "FEDFUNDS", "DFF", "INDPRO", "M2SL", "WALCL",
+    "DTWEXBGS",
+    # -- Federal Reserve Bank of St. Louis (arithmetic on the H.15 / TIPS legs) --
+    "T10Y2Y", "T10Y3M", "T5YIE", "T10YIE", "T5YIFR",
+    # -- Federal Reserve Bank of New York --
+    "SOFR",
 })
 _fred_thirdparty_cache: dict[str, str] = {}
 #: Series metadata kept from a successful probe, keyed by id:
@@ -700,6 +772,13 @@ def _fred_series_is_thirdparty(series: str, key: str) -> str:
     unavailable'. Now the body decides: nonexistence -> "unknown" (cached);
     a rejected key RAISES AUTH_REQUIRED (a credential problem is not a
     licensing verdict); transport / 5xx / 429 stay on the fail-closed path.
+
+    2026-09-22: `_FRED_RESALE_ALLOWLIST` (the reviewed public-domain roster)
+    is consulted AFTER the hard deny and BEFORE anything FRED says. Order is
+    the whole design: deny beats clearance, clearance beats the notes-text
+    heuristic, and the heuristic still decides everything on neither roster.
+    The probe still RUNS for a cleared id -- `name` / `units` / `frequency`
+    come from it -- it just cannot produce a licensing refusal for one.
     """
     s = (series or "").upper()
     if s in _FRED_KNOWN_THIRDPARTY:
@@ -725,7 +804,16 @@ def _fred_series_is_thirdparty(series: str, key: str) -> str:
         if rows:
             row = rows[0] if isinstance(rows[0], dict) else {}
             meta = (row.get("notes") or "") + " " + (row.get("title") or "")
-            verdict = "thirdparty" if _FRED_THIRDPARTY_NOTE.search(meta) else ""
+            # A CLEARED id is not refusable by a word match over FRED's free
+            # text: the roster entry was reviewed against the publisher, the
+            # regex is a heuristic over prose we do not write, and the
+            # heuristic's false positives are a measured class (MIUR,
+            # KSRUSS0URN -- public-domain BLS series whose TITLE carries a
+            # licensor's word). The hard deny above still outranks both.
+            verdict = ("thirdparty"
+                       if (_FRED_THIRDPARTY_NOTE.search(meta)
+                           and s not in _FRED_RESALE_ALLOWLIST)
+                       else "")
             _fred_series_meta_cache[s] = {
                 "name": row.get("title"),
                 "units": row.get("units"),
@@ -735,9 +823,16 @@ def _fred_series_is_thirdparty(series: str, key: str) -> str:
             verdict = "unknown"  # FRED itself says the series does not exist
         _fred_thirdparty_cache[s] = verdict
         return verdict
-    # Probe unavailable: FAIL CLOSED. Serve ONLY a known U.S.-gov series; refuse the
-    # rest. Do NOT cache (so a recovered probe re-decides authoritatively next time).
-    return "" if s.startswith(_FRED_GOV_PREFIXES) else "unverifiable"
+    # Probe unavailable: FAIL CLOSED. Serve ONLY a series this package has
+    # already cleared -- a reviewed roster entry, or the known U.S.-gov prefix
+    # heuristic -- and refuse the rest. The roster is the exact half: it admits
+    # the eight cleared ids no prefix covers (JTSJOL, PCE, PSAVERT, TOTALSA,
+    # PERMIT, DGORDER, ICSA, DTWEXBGS), which used to read "unverifiable" on a
+    # FRED outage. Do NOT cache (so a recovered probe re-decides
+    # authoritatively next time).
+    if s in _FRED_RESALE_ALLOWLIST or s.startswith(_FRED_GOV_PREFIXES):
+        return ""
+    return "unverifiable"
 
 
 @mcp_tool(name="get_fred_data", cache=FUNDAMENTAL)

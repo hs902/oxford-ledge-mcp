@@ -25,6 +25,8 @@ same cache primitives.
 
     cache_key(tool_name, args) -> str
     cache_get(tool_name, args, ttl_fn) -> Any | None
+    cache_lookup(tool_name, args, ttl_fn) -> (Any, age_seconds) | None
+    mark_served_from_cache(result, age_seconds) -> Any   # the replay stamp
     cache_set(tool_name, args, result, ttl_fn) -> None
     clear_cache() -> None  # useful for tests
 """
@@ -271,6 +273,64 @@ def cache_set(
                and len(_TOOL_CACHE) > 1):
             oldest_key = min(_TOOL_CACHE, key=lambda k: _TOOL_CACHE[k][1])
             del _TOOL_CACHE[oldest_key]
+
+
+def cache_lookup(
+    tool_name: str,
+    args: dict[str, Any],
+    ttl_fn: Callable[[str], int],
+) -> Optional[tuple[Any, int]]:
+    """`cache_get` plus the entry's AGE: (isolated result, whole seconds
+    since it was stored), or None on a miss. Added 2026-09-21 (external live
+    review of wheel 3.6.0): a replay left the seam unmarked, so an agent could
+    not tell a 3,600-second-old answer from a fresh read. The store keeps
+    `expires_at` and the caller knows the TTL, so age is `ttl - remaining`,
+    clamped to [0, ttl]; nothing new is stored."""
+    ttl = ttl_fn(tool_name)
+    if ttl == 0:
+        return None
+    key = cache_key(tool_name, args)
+    with _CACHE_LOCK:
+        entry = _TOOL_CACHE.get(key)
+        now = _time.time()
+        if entry is not None and now < entry[1]:
+            hit = entry[0]
+            remaining = entry[1] - now
+        else:
+            hit = _MISS
+            remaining = 0.0
+    if hit is _MISS:
+        return None
+    age = int(max(0.0, min(float(ttl), ttl - remaining)))
+    return _isolate(hit), age
+
+
+def mark_served_from_cache(result: Any, age_seconds: int) -> Any:
+    """Stamp a replayed result: `_meta.served_from_cache: true` +
+    `_meta.cache_age_seconds`. A FRESH result never carries either key
+    (absent, not false), so an installed reader that never looks sees
+    nothing new. Operates on the isolated copy `cache_lookup` returned, so
+    the stored entry is untouched and the next replay measures its own age.
+    A new `_meta` is inserted BEFORE the two disclosure literals, which the
+    dispatch seam pins as the last two keys. Non-dict results pass through
+    (the seam never caches one)."""
+    if not isinstance(result, dict):
+        return result
+    meta = result.get("_meta")
+    if isinstance(meta, dict):
+        meta["served_from_cache"] = True
+        meta["cache_age_seconds"] = int(age_seconds)
+        return result
+    out: dict[str, Any] = {}
+    tail: dict[str, Any] = {}
+    for k, v in result.items():
+        if k in ("attribution", "disclaimer"):
+            tail[k] = v
+        else:
+            out[k] = v
+    out["_meta"] = {"served_from_cache": True, "cache_age_seconds": int(age_seconds)}
+    out.update(tail)
+    return out
 
 
 def clear_cache() -> int:

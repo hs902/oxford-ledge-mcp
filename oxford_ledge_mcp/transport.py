@@ -76,6 +76,7 @@ file-size pair pin names it).
 
 from __future__ import annotations
 
+import contextvars
 import http.client
 import ipaddress
 import json
@@ -188,9 +189,20 @@ def _is_loopback_host(url):
     try:
         # urlsplit already strips the brackets from an IPv6 authority, so
         # `http://[::1]:10000/` arrives here as the bare literal `::1`.
-        return ipaddress.ip_address(host).is_loopback
+        addr = ipaddress.ip_address(host)
     except ValueError:
         return False
+    # An IPv4-mapped IPv6 address (`::ffff:127.0.0.1`) is decided by the
+    # IPv4 address it wraps, explicitly. CPython 3.13 changed
+    # `IPv6Address.is_loopback` to do exactly this, so before this line the
+    # verdict for the same URL depended on the consumer's interpreter:
+    # loopback on 3.13+, remote (refused) on <=3.12, with `requires-python`
+    # at >=3.9 (CISO re-seat 2026-09-21, L-10). The socket connects to the
+    # wrapped IPv4 address, so the wrapped address is what the key travels to.
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:
+        return mapped.is_loopback
+    return addr.is_loopback
 
 
 def _authenticated_request(url, data=None, headers=None):
@@ -227,6 +239,54 @@ def _authenticated_request(url, data=None, headers=None):
         # Authenticates + meters the call against the key's account (#120/#121).
         req.add_unredirected_header("x-api-key", _S._API_KEY)
     return req
+
+
+#: The opener for a key-carrying request to a plain-http host -- which, after
+#: `_authenticated_request`, is only ever a loopback host.
+#:
+#: `urllib.request.urlopen` opens through the DEFAULT opener, whose
+#: `ProxyHandler` reads `http_proxy` from the environment (the registry on
+#: Windows) and bypasses nothing the `no_proxy` list does not name: unlike
+#: `requests`, urllib has no implicit localhost bypass. So on an operator box
+#: with a corporate or system proxy in the environment, "loopback" was not
+#: where the key went. Measured with a local listener standing in as the
+#: proxy: the request arrived THERE as `GET http://127.0.0.1:<port>/api/x`
+#: with `x-api-key` on it, for `localhost`, `127.0.0.1` and `[::ffff:127.0.0.1]`
+#: alike, and nothing reached the loopback port at all.
+#:
+#: A loopback request has no business at a proxy -- the exemption exists
+#: because the key stays on this host -- so this opener installs an EMPTY
+#: `ProxyHandler({})`, which `build_opener` accepts in place of the
+#: environment one. Every other default handler is unchanged: redirects are
+#: still followed, and the key still stays off a cross-host hop because it is
+#: an unredirected header (CISO-3). Chosen over "refuse unless `no_proxy`
+#: names the host" because the README's http://localhost:10000 setup has to
+#: keep working under a corporate proxy without a second environment
+#: variable, and because that refusal would have keyed on urllib's own bypass
+#: decision -- the thing that was wrong.
+_LOOPBACK_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _open_authenticated(req, timeout):
+    """`urlopen` for a request built by `_authenticated_request`.
+
+    A request that carries the key over plain http (a loopback host, by
+    construction) opens through `_LOOPBACK_OPENER`, never the environment
+    proxy. Everything else -- https, and any keyless request -- opens through
+    `urllib.request.urlopen` exactly as before, which is also the seam the
+    driver contracts stub. A driver that stubs `urlopen` and points a KEYED
+    config at a plain-http loopback URL must stub `_LOOPBACK_OPENER.open` as
+    well, or the call reaches the real interface.
+
+    The predicate reads the request, not the config: "is the key ON this
+    request" is the property being protected, and the header name is
+    compared case-insensitively because `Request` capitalises what it
+    stores.
+    """
+    if req.type == "http" and any(k.lower() == "x-api-key"
+                                  for k, _ in req.header_items()):
+        return _LOOPBACK_OPENER.open(req, timeout=timeout)
+    return urllib.request.urlopen(req, timeout=timeout)
 
 
 #: Exceptions `urllib.request.urlopen` does NOT wrap, measured rather than
@@ -443,6 +503,21 @@ def _parse_json_body(raw, where):
             f"changing arguments.")
 
 
+#: SF-MCP-USAGE-ROLLUP D7 (CISO + DESIGN + VOICE ruling, 2026-09-23,
+#: docs/board/audit/2026-09-23_CISO_DESIGN_VOICE_d7_rest_path_counting.md
+#: sect.5): the nine REST-path tools name themselves to the host so the
+#: user's own activity page can count them. The dispatcher
+#: (`_execute_tool_with_limits` in server.py) sets `_CURRENT_TOOL` to the
+#: registered name it is running and resets it in its `finally`; `_api_get`
+#: sends the header only when that is set AND the request carries the key,
+#: and as an UNREDIRECTED header, so it stays off a cross-host redirect the
+#: way the key does (CISO-3). Nothing else rides with it: no version, no
+#: arguments. A contextvar, not a module global, so two dispatches on two
+#: threads never read each other's tool.
+_MCP_TOOL_HEADER = "X-OL-MCP-Tool"
+_CURRENT_TOOL = contextvars.ContextVar("ol_mcp_current_tool", default=None)
+
+
 def _api_get(path, params=None, timeout=15):
     """Make a GET request to the Oxford Ledge API."""
     from oxford_ledge_mcp import server as _S  # call-time read: tests set S._API_URL / S._API_KEY
@@ -459,8 +534,11 @@ def _api_get(path, params=None, timeout=15):
         if qs:
             url += f"?{qs}"
     req = _authenticated_request(url)
+    tool = _CURRENT_TOOL.get()
+    if tool is not None and req.has_header("X-api-key"):
+        req.add_unredirected_header(_MCP_TOOL_HEADER, tool)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _open_authenticated(req, timeout) as resp:
             raw = _read_capped(resp, f"GET {path}")
     except urllib.error.HTTPError as e:
         body = ""
@@ -984,6 +1062,11 @@ def _api_tool_call(tool, arguments, timeout=30):
         validated-key path bypasses the browser-CSRF Origin check AND is
         correctly METERED against the key's account. Keyed traffic must
         NOT move to /mcp — the metering gap there (V4) is still open.
+        [STALE, annotated 2026-09-23: V4 was CLOSED on the host in commit
+        bbdf36bf (2026-09-13) -- a keyed call on POST /mcp is now metered
+        on the same meter as /api/mcp/tool. The keyed leg still posts to
+        /api/mcp/tool and is still metered there; the "still open" reason
+        above is history, kept so the change is visible.]
       * keyless -> POST /mcp as JSON-RPC tools/call, the transport
         DESIGNED for absent-Origin anonymous agents; it enforces the
         identical cleancore + tier + rate chain through the shared front.
@@ -1023,7 +1106,7 @@ def _api_tool_call_keyed(tool, arguments, timeout):
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _open_authenticated(req, timeout) as resp:
             raw = _read_capped(resp, "POST /api/mcp/tool")
     except urllib.error.HTTPError as e:
         parsed, raw_err = _read_http_error_body(e)

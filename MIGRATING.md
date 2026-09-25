@@ -110,6 +110,273 @@ Include in your bug report:
    (`OXFORD_LEDGE_URL` set or not).
 5. `pip show oxford-ledge-mcp | grep Version` so we know which release.
 
+## 3.7.0 — the REST-path tools name themselves to the host, three additive `_meta` / row keys, new optional arguments on `get_bdc_holdings` and `get_fails_to_deliver`, the loopback exemption ignores `http_proxy`, and two FRED series stop serving
+
+Cut 2026-09-24 (it was `## Unreleased` until the bump); an installed 3.6.0
+has none of it.
+**Tool names are unchanged. Nothing is removed, renamed or trimmed.** A reader
+that ignores keys it does not know, and passes only the arguments it already
+passed, sees nothing new.
+
+**Correction, 2026-09-22.** Until today this paragraph denied any change to
+tool names AND to argument schemas, in one sentence. The second half is now
+false for exactly one tool: `get_bdc_holdings` gained two OPTIONAL arguments,
+`limit` and `offset` (see below). The clause is corrected rather than quietly
+dropped, because a migration note that denies an argument-schema change is
+worse than no note -- the same reason the 3.5.0 section below carries its own
+struck sentence. (The superseded wording is deliberately not re-quoted: a gate
+hunts that exact sentence, so a correction repeating it verbatim would red on
+its own fix.)
+
+**Second correction, 2026-09-22 (same day, later).** "A reader that passes only
+the arguments it already passed sees nothing new" is now false for two ARGUMENT
+VALUES rather than for any schema: `get_fred_data` refuses `MORTGAGE30US` and
+`AAA`, which it previously served some of the time. That is the only breaking
+change in this section and it has its own heading at the end. The sentence
+above is left standing and qualified here rather than rewritten, because a
+reader who acted on it should be able to see that it changed.
+
+**Third correction, 2026-09-24 (at the bump).** "False for exactly one tool"
+in the first correction, and "the only argument-schema change in this release" in the
+`get_bdc_holdings` item below, were each true of the sub-section they were
+written in and false of the release: `get_fails_to_deliver` also gained an
+OPTIONAL argument, `end_date`, and it and `ol_form_d_raises` now declare
+`days` minimums (see *Fixed -- government feeds*). The new argument is
+additive; the minimums are not quite -- `days: 0` is now refused on both tools
+(the correction at the end of that section), so "the only breaking change in
+this section" in the second correction has a sibling too. All three sentences
+are qualified here rather than rewritten, for the same reason as the two
+corrections above.
+
+### What this client now sends (with `OXFORD_LEDGE_API_KEY` set)
+
+The nine tools that call a hosted REST route directly (`get_holders`,
+`get_insider_trades`, `get_corporate_events`, `search_bdc_borrower`,
+`get_bdc_list`, `get_bdc_borrower_mark_history`, `get_bdc_holdings`,
+`get_13f_holdings`, `get_value_investing_fact`) add ONE request header,
+`X-OL-MCP-Tool`, whose value is the calling tool's registered name -- no
+arguments, no package version, nothing else. Oxford Ledge uses it to count
+those lookups on the key owner's own activity page; without it the host cannot
+tell an assistant's lookup from any other request on the same route.
+
+- **Keyless calls send nothing new.** The header rides only a request that
+  already carries your key, and never a request the package makes outside a
+  tool call.
+- **It never crosses a redirect**, exactly like the key.
+- **Nothing in any response changes because of it.** The host ignores a
+  missing header, so an installed 3.6.0 keeps working; its lookups on these
+  nine routes are simply not counted.
+
+**What to do:** nothing. If your organisation reviews outbound headers, this
+is the one addition in 3.7.0.
+
+### What you may now see (external live review of 3.6.0, 2026-09-21)
+
+- **`_meta.response_size`** on the nine REST-path tools (`get_bdc_holdings`,
+  `get_bdc_list`, `search_bdc_borrower`, `get_bdc_borrower_mark_history`,
+  `get_holders`, `get_insider_trades`, `get_corporate_events`,
+  `get_13f_holdings`, `get_value_investing_fact`): `{chars, approx_tokens,
+  budget_chars: 32000, over_budget}` and, when over budget, a `hint`. The
+  name-proxied tools already carried this block from the hosted server;
+  it is the same shape and the same budget. **Nothing is dropped** to fit --
+  a `get_bdc_holdings` answer for a large BDC is still every row, now
+  labelled `over_budget: true`. If your client has a tool-result ceiling
+  (the reviewing one refused answers above ~50,000 characters), read
+  `over_budget` before you read the rows. ~~`get_bdc_holdings` takes no
+  `limit`; paging it is a hosted-route change and is not in this release.~~
+  **Struck 2026-09-22: it takes one now -- see the next item.**
+- **`get_bdc_holdings` accepts `limit` and `offset` (both OPTIONAL).** The
+  only argument-schema change in this release, and it is additive: **a call
+  that declares neither is byte-for-byte what 3.6.0 returned**, every row, no
+  new keys. Declare either and you get that window of `holdings` plus two
+  blocks: `page` `{limit, offset, returned, total, hasMore}` and
+  `completeness` `{returned, limit, total_available, complete,
+  completeness_basis, rows_key}`.
+  - **The page never restates the book.** `totalHoldings`,
+    `holdingsReturned`, `nonBorrowerRowsExcluded`, `excludedRowsFairValue`,
+    `totalFairValue` and its arbitration triple, `weightedAvgPrice`,
+    `byLienPosition`, `topIndustries` and `portfolioStructure` stay computed
+    over every row the store returned. `page.total` is the served row count
+    and equals `holdingsReturned`. So `returned < total` -- not a smaller
+    `totalHoldings` -- is how you know you hold a window.
+  - `limit` is 1..5000 and defaults to 5000 (the store's own row backstop, so
+    the default is "every row"); `offset` is 0..5000 and defaults to 0.
+    **Out-of-range values are REFUSED, not clamped** -- `limit: 0` or
+    `offset: -1` comes back as an invalid-params error, never as a silently
+    adjusted page. An offset past the end is NOT an error: it is an empty
+    `holdings` list with `page.total` intact and `hasMore: false`.
+  - Same key set, same vocabulary and same rules as `search_bdc_borrower`'s
+    `limit` / `offset`. If you have paged that tool, you have paged this one.
+  - Nothing is trimmed to fit, here or anywhere: `_meta.response_size` still
+    reports, and you decide. A 325-row book serialises to ~125,000 characters
+    whole, ~39,000 at `limit: 100`, ~10,700 at `limit: 25`.
+- **`_meta.served_from_cache: true` and `_meta.cache_age_seconds`** on any
+  result replayed from the wheel's in-process cache (TTL per tool: 300 s
+  market, 3600 s fundamental). A fresh result carries neither key. If you
+  need a fresh read, change an argument or wait out the TTL; the marker tells
+  you which you got.
+- **`ol_federal_contracts`: `obligations[].recipients` is the ten largest by
+  `amount`.** A fiscal-year row that had more carries
+  `recipients_truncated: true` and `recipients_total`; a row with ten or
+  fewer is served as stored and carries neither. `entity_count` was always the
+  full count and still is; `total_obligations_usd` still sums every kept
+  recipient, not just the ten shown.
+
+**What to do:** nothing, unless you summed `recipients[].amount` to rebuild
+`total_obligations_usd` -- the two agreed before this change and now agree
+only on a row with ten or fewer recipients. Use `total_obligations_usd`; it
+is still the sum over every kept recipient.
+
+### The loopback exemption ignores `http_proxy` (behaviour change, nothing on the wire)
+
+One behaviour changes, and only for the configuration where `OXFORD_LEDGE_API_KEY`
+is set AND `OXFORD_LEDGE_URL` is a plain `http://` loopback address
+(`localhost`, `127.x.y.z`, `[::1]`, `[::ffff:127.0.0.1]`):
+
+- **Before:** the request honoured `http_proxy` / `HTTP_PROXY` from the
+  environment, and Python's urllib has no implicit localhost bypass -- so
+  unless `no_proxy` named the host, the request (with the key on it, in the
+  clear) went to the proxy, not to the local instance.
+- **After:** a key-carrying plain-http request opens with no environment
+  proxy at all and reaches the local interface directly. `no_proxy` is no
+  longer needed for this setup, and a corporate or system proxy never sees
+  the key.
+
+**What to do:** nothing, unless you relied on the old behaviour -- for
+example an intercepting debug proxy at `http_proxy=http://127.0.0.1:8080`
+that captured this client's keyed traffic to `localhost:10000`. It will no
+longer see that traffic; that is the fix. Requests to an `https://` host, and
+every keyless request, honour the environment proxy exactly as before.
+
+### Changed -- BDC mark changes (read layer)
+
+Also in 3.7.0 (an installed 3.6.0 does not have it; this sub-section was
+under `## Unreleased` until the bump). **Tool names are unchanged, and no
+argument schema changes in THIS sub-section** -- `get_bdc_holdings` gained two
+optional arguments elsewhere in the release, recorded at the top of this
+section. This
+paragraph used to make that denial for names and argument schemas together,
+without the qualifier, and it is narrowed rather than deleted: a blanket
+denial in one sub-section reads as a denial for the whole release. (The
+original wording is not quoted here -- a gate hunts that exact sentence, and
+a correction that reproduces it verbatim reds the gate on its own fix.) Two
+additive output changes and one value correction on the hosted-leg BDC tools:
+
+- **`ol_bdc_mark_changes`: `suspect_moves` (top level, additive) and three
+  new `filters` keys.** A move of more than `filters.max_abs_mark_delta_pts`
+  (15) points in one quarter, a `latest_mark` of exactly 100.00, or a mark
+  outside `filters.debt_mark_band_pts` ([30.0, 110.0]) is now held in
+  `suspect_moves` with a `reason` code instead of being ranked in
+  `increases` / `decreases`. Rows have the ranked-row shape plus `reason`;
+  `filters.suspect_reasons` maps each code to a sentence, and
+  `suspect_moves_completeness` counts the held-out rows.
+  - **Before:** a 45-point single-quarter jump ranked #1 among increases.
+  - **After:** it is the first row of `suspect_moves` with
+    `reason: "delta_exceeds_threshold"`; `increases` starts at the largest
+    move that survived. Nothing stored changed.
+  - **What to do:** a reader that summarises "the biggest moves" should
+    read `suspect_moves` too and say they were held out, not omit them; a
+    reader that treated every ranked row as a credit event no longer needs
+    to second-guess the top of the list.
+- **`ol_bdc_mark_changes`: `latest_mark` / `prior_mark` are 2 dp** (value
+  correction at emit only; `mark_delta` already was).
+- **`ol_bdc_top_borrowers`: `holder_count_active` / `holder_count_ever` on
+  each row (additive).** `holder_count` is unchanged. The pair is summed over
+  `holder_ticker_status`, so `ever - active` is the number of wound-down or
+  merged-away filers in the syndicate; both are `null` when the roster could
+  not be checked. The `summary` now says "syndicated across N active BDCs
+  (M ever)" for rows where the two differ.
+
+### Fixed -- government feeds (gov_feeds / mcp_tools_gov)
+
+Also in 3.7.0; an installed 3.6.0 does not have them. **Tool names are
+unchanged. Three argument schemas gain properties or
+bounds (additive). One tool's wire VALUES move by one day; one tool gains a
+key.**
+
+- **`get_fails_to_deliver` -- a value change you may notice.** A `days`
+  window is now `days` calendar days inclusive (it was `days + 1`). On the
+  wire: `coverage.window_start` and `window.from` are ONE DAY LATER than
+  before for the same arguments; `coverage.days_covered` on a fully loaded
+  window now equals `days` (it read `days + 1`, the "91 of the 90 requested
+  days" sentence); `days_before_earliest` / `days_after_latest` cap at `days`;
+  a `history` row dated exactly `days` days before the window's end is no
+  longer served. If you re-implemented the count, use
+  `days_before_earliest + days_covered + days_after_latest == days` as the
+  check -- it holds whenever the window meets the loaded range.
+  - **Before:** `days=30`, `as_of` 2026-08-22 -> `window.from` 2026-07-23,
+    `days_covered` 31.
+  - **After:** `window.from` 2026-07-24, `days_covered` 30.
+- **`get_fails_to_deliver` schema (additive):** `end_date` (string, ISO date
+  the window ends on; default the latest loaded settlement date, `as_of`) is
+  declared -- the hosted handler already honoured it, so a client that passed
+  it anyway saw no change; a client that validated arguments against this
+  package's schema can now pass it. `days` declares `minimum: 1`.
+- **`get_debt_maturities` (additive):** a top-level `summary` string joins
+  the payload -- the reader that produced the ladder, the filing it is AS OF,
+  and the bucket(s) that have wholly or partly elapsed since that filing. No
+  existing key moved. The description's `source` vocabulary now matches the
+  values you have been receiving: `'xbrl' | 'table' | 'regex' | null`, plus
+  `'<source>_rejected'` and `'<source>_non_usd'`; `filing_date`,
+  `report_date` and `cross_validated` were already served and are now
+  documented (`cross_validated` is present only when true -- read
+  `validation.valid` for the negative).
+- **`ol_form_d_raises` schema (additive):** `days` declares `minimum: 1`
+  (the handler's existing clamp floor; a value below 1 falls back to the
+  365-day default, as before). No behaviour change.
+- **Runtime prose (no shape change):** three sentences that named tools this
+  package does not ship (`get_institutional_holders`,
+  `ol_bank_structure_events`, `ol_13f_filer_search`) now name the wheel tool
+  (`get_holders`) or say what the hosted-only record is. If you matched on
+  those sentences, re-anchor.
+- **Corrected at the bump, 2026-09-24: `days` below 1 is now REFUSED on both
+  tools.** The two "`days` declares `minimum: 1`" items above said additive,
+  and the Form D one said no behaviour change. Both were true of the hosted
+  catalog and are false of this package: it validates every declared bound
+  before the call, on both transports, so `days: 0` (or a negative) on
+  `ol_form_d_raises` or `get_fails_to_deliver` now comes back as
+  `INVALID_PARAMS` ("`days`: 0 is less than the minimum of 1"), where 3.6.0
+  forwarded it and the host fell back to its default window. Measured on both
+  builds. The Form D property text said "a value below 1 falls back to
+  the 365-day default" at the bump; the publish vet corrected it to say omit
+  `days` for the default and that a value below 1 is refused. The fallback is
+  the host handler's behaviour and no longer
+  reachable through this package.
+  - **Before (3.6.0):** `{"days": 0}` -> the default window, served.
+  - **After (3.7.0):** `{"days": 0}` -> `INVALID_PARAMS`, nothing sent.
+
+**What to do:** nothing, unless you computed FTD window dates or day counts
+yourself -- re-derive from `coverage` rather than from `days` -- or you pass
+`days: 0` to mean "the default": omit `days` instead.
+
+### `get_fred_data` — two ids stop serving, eight start surviving a FRED outage
+
+**This is one of the two refusals in 3.7.0 of a value 3.6.0 accepted** (the
+other is `days` below 1, at the end of *Fixed -- government feeds*). Two FRED
+series ids are now refused before any request is made:
+
+| series | publisher | what you used to get |
+|---|---|---|
+| `MORTGAGE30US` | Freddie Mac (Primary Mortgage Market Survey) | served, or refused, depending on whether FRED's `notes` text happened to carry a copyright word |
+| `AAA` | Moody's (Seasoned Aaa Corporate Bond Yield) | the same coin-flip |
+
+Both now raise `INVALID_PARAMS` naming the series, with no FRED request spent.
+Neither is a U.S. Government work under 17 USC 105, so neither was ever safe
+for this gov-public-data package to redistribute; the previous behaviour was
+non-deterministic rather than permissive by design.
+
+**What to do if you consumed either:** read them from FRED directly under your
+own agreement with the rights holder, or substitute a federal series -- `DGS30`
+or `DGS10` for a long-rate anchor. There is no flag to re-enable them, and
+adding one would put the licensing decision in the caller's hands.
+
+**In the other direction, and additive:** eight cleared federal series that
+used to be refused as unverifiable whenever FRED's metadata endpoint was
+unreachable now serve through an outage -- `JTSJOL`, `PCE`, `PSAVERT`,
+`TOTALSA`, `PERMIT`, `DGORDER`, `ICSA`, `DTWEXBGS`. Nothing about a successful
+call changes: the payload shape, the `name` / `units` / `frequency` keys (still
+`null` when the probe did not run) and the values are what they were.
+
 ## 3.6.0 — the 13F superseded-parent fold on `get_holders` (additive), one value correction, one config shorthand
 
 **Tool names and argument schemas are unchanged; no key is renamed or

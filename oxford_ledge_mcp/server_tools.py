@@ -296,12 +296,21 @@ TOOLS = [
             "that the series has no data. Series ids must match FRED's id "
             "charset (^[A-Z0-9_.-]{1,40}$); anything else is refused with "
             "INVALID_PARAMS before any request is made. U.S.-government / "
-            "public-domain series only: a series whose FRED metadata carries a "
+            "public-domain series only, decided in three steps: a REFUSED "
+            "roster of 14 ids with a known non-government rights holder (the "
+            "ICE BofA OAS family, VIXCLS, UMCSENT, MICH, SP500, DJIA, "
+            "NASDAQCOM, MORTGAGE30US, AAA) is refused with INVALID_PARAMS and "
+            "NO request at all; a CLEARED roster of 40 reviewed federal series "
+            "(BLS, BEA, Census, ETA, the Board of Governors' H.15/H.4.1/H.6/"
+            "H.10/G.17 releases, the St. Louis and New York Fed) always serves; "
+            "anything else is decided by FRED's own series metadata -- a "
             "third-party copyright notice or a named licensor (S&P Dow Jones, "
-            "ICE BofA, Moody's, CBOE, University of Michigan ...) is refused "
-            "with INVALID_PARAMS -- a BLS/BEA series whose title merely "
-            "contains such a word (MIUR, 'Unemployment Rate in Michigan') is "
-            "served -- and an id FRED does not know is refused as unknown. "
+            "ICE BofA, Moody's, CBOE, University of Michigan ...) is refused, "
+            "while a BLS/BEA series whose title merely contains such a word "
+            "(MIUR, 'Unemployment Rate in Michigan') is served. An id FRED "
+            "does not know is refused as unknown. When FRED's metadata is "
+            "unreachable, only a cleared or known-government-prefixed id "
+            "serves and the rest are refused as unverifiable. "
             "Requires FRED_API_KEY; cached 1h."
         ),
         "inputSchema": {
@@ -552,13 +561,28 @@ TOOLS = [
             "nonBorrowerRowsExcluded, not over holdings[]. An unknown or retired ticker returns "
             "`error` beside an empty list. The totals, structure metrics and the arbitration are "
             "Oxford Ledge's parse of SEC EDGAR Schedule-of-Investments filings (10-Q/10-K), not "
-            "filer-published figures. `ticker` is required. [Requires API mode]"
+            "filer-published figures. `ticker` is required. PAGING (additive): `limit` / "
+            "`offset` page the `holdings` rows only -- totalHoldings, holdingsReturned, "
+            "nonBorrowerRowsExcluded, excludedRowsFairValue, totalFairValue and its arbitration, "
+            "weightedAvgPrice, byLienPosition, topIndustries and portfolioStructure all stay "
+            "computed over the WHOLE book, so a page never restates the filing; a call declaring "
+            "either gets `page` {limit, offset, returned, total, hasMore} where `total` is the "
+            "served row count (== holdingsReturned), plus a `completeness` block with "
+            "total_available; an offset past the end is an empty page with total intact; "
+            "out-of-range values are REFUSED, never clamped; a call declaring neither is "
+            "unchanged (every row, up to the store's 5000-row backstop). A large book is the "
+            "reason this exists: a ~325-row portfolio serialises past 100,000 characters, over "
+            "most clients' tool-result ceiling. Nothing is ever dropped to fit -- read "
+            "`_meta.response_size` and re-request with a smaller `limit` if it crowds your "
+            "context. [Requires API mode]"
         )
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "ticker": {"type": "string", "description": "BDC ticker symbol (e.g. ARCC, OBDC — see get_bdc_list)"},
+                "limit": {"type": "integer", "description": "Max `holdings` rows to return (default 5000 = every row; hard cap 5000, refused above). Pages the row list only.", "minimum": 1, "maximum": 5000},
+                "offset": {"type": "integer", "description": "Rows to skip before the page (default 0; max 5000). Past the end returns an empty page with `page.total` intact.", "minimum": 0, "maximum": 5000},
             },
             "required": ["ticker"],
         },
@@ -573,14 +597,26 @@ TOOLS = [
             "MILLIONS OF USD, not raw dollars -- 400 means $400M. `maturities` "
             "is a LIST of year/amount pairs (not a year-keyed map), normally the "
             "next ~5 years, with everything beyond the table in `thereafter`. "
-            "`confidence` is high|medium|low|none and `source` is "
-            "'table'|'regex'|null (a ladder the balance-sheet cross-check "
-            "rejected is served as 'table_rejected' / 'regex_rejected' beside "
-            "maturities=[] and confidence 'none') -- all describe PARSER "
-            "certainty, not filer "
+            "`confidence` is high|medium|low|none and `source` names the reader "
+            "that produced the ladder: 'xbrl' (the filer's own XBRL facts, tried "
+            "first), 'table' (the footnote's HTML table), 'regex' (the footnote "
+            "text), or null when nothing parsed; a ladder the balance-sheet "
+            "cross-check rejected is served as 'xbrl_rejected' / "
+            "'table_rejected' / 'regex_rejected' beside maturities=[] and "
+            "confidence 'none', and a filer whose XBRL debt is not in USD as "
+            "'<source>_non_usd' -- all describe PARSER certainty, not filer "
             "accuracy; `validation` carries {valid, maturity_total, bs_total, "
             "diff_pct, warning} cross-checking the ladder against the balance "
-            "sheet, so check it before quoting a total. confidence / "
+            "sheet, so check it before quoting a total. `cross_validated` is "
+            "present (true) ONLY when the ladder total matched the balance sheet "
+            "and absent otherwise -- read validation.valid for the negative, not "
+            "the key's absence. `filing_date` is the annual report's filing date "
+            "and `report_date` its period end: THE LADDER IS AS OF filing_date, "
+            "not today -- a bucket labelled with the current year has partly "
+            "elapsed by the time you read it, and amounts in it may already have "
+            "been repaid or refinanced; `summary` names the elapsed bucket(s) "
+            "when there are any, and the reader that produced the ladder. "
+            "confidence / "
             "confidence_score / validation are Oxford Ledge's assessment of its "
             "own parse; the amounts are the filing's. An unparseable filer "
             "returns maturities=[] with confidence 'none'. EDGAR only -- no "
@@ -914,7 +950,8 @@ TOOLS = [
                 },
                 "days": {
                     "type": "integer",
-                    "description": "Trailing filing-date window in days (optional). The data set is quarterly with ~1 quarter of posting lag: a window shorter than that is empty by construction.",
+                    "description": "Trailing filing-date window in days (optional; 1..1825; omit it for the 365-day default -- a value below 1 is refused as INVALID_PARAMS before any request, never widened to the default). The data set is quarterly with ~1 quarter of posting lag: a window that starts after the envelope's `data_through` is empty by construction, and the empty-window summary says so, naming `data_through`. There is deliberately no schema floor above 1: the lag is a property of the loaded data (days behind on the day a quarter's set lands, months behind just before the next), not a constant a schema could state.",
+                    "minimum": 1,
                     "maximum": 1825,
                 },
                 "limit": {
@@ -958,8 +995,13 @@ TOOLS = [
                 },
                 "days": {
                     "type": "integer",
-                    "description": "Trailing window in days (default 180, max 730)",
+                    "description": "Trailing window in days (default 180, max 730), counted inclusively -- a 90-day window holds 90 settlement dates -- and ending at `as_of` unless end_date is given",
+                    "minimum": 1,
                     "maximum": 730,
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": "ISO date (YYYY-MM-DD) the window ends on; default = the latest loaded settlement date (`as_of`). Pass today's date to measure against the calendar; a future date is clamped to today.",
                 },
             },
             "required": ["ticker"],
@@ -1053,7 +1095,7 @@ TOOLS = [
     },
     {
         "name": "ol_federal_contracts",
-        "description": "Federal-contract obligation history for a ticker, OR the fiscal-year leaderboard -- for government-revenue-dependence diligence. TWO SHAPES, and one of `ticker` or `fiscal_year` is REQUIRED (neither raises INVALID_PARAMS; if both are given, `ticker` wins and `fiscal_year` is ignored). With `ticker`: {summary, ticker, as_of, obligations} where each row is {ticker, fiscal_year, total_obligations_usd (USD with cents -- units of dollars, not thousands), entity_count, recipients (each {name, uei, recipient_id, amount}), dropped_unresolved (how many awardee search hits the crosswalk did NOT attribute to this ticker -- read it before treating the total as complete), start_date, end_date, fetched_at, period_complete, days_elapsed, days_in_period}, NEWEST FY FIRST; `as_of` is the date USAspending was last read. A fiscal year whose end_date lies after `as_of` is PARTIAL (period_complete false, days_elapsed < days_in_period) and its total is year-to-date -- never compare it to a full year. `ueis` is no longer emitted (it duplicated recipients[].uei). With `fiscal_year` only: {summary, fiscal_year, leaderboard} of {ticker, fiscal_year, total_obligations_usd, entity_count, fetched_at}, largest first (the envelope carries period_complete / days_elapsed / days_in_period for the requested year). `limit` default 20, hard cap 100. Obligations are federal awards, not company-reported revenue. Obligations are the ISSUER's while the crosswalk keys one share class: a ticker with no rows whose share-class sibling has them is served the sibling's rows under the sibling's `ticker`, with `requested_ticker` carrying the symbol you asked for and the summary saying so; a ticker off the crosswalk honestly returns []. Source: USAspending.gov (public domain; OL ticker-crosswalked); FREE (no paywall on the hosted channel). ATTRIBUTION: the per-recipient amounts and UEIs are USAspending verbatim; attributing them to a TICKER is an Oxford Ledge curated crosswalk, the per-ticker total and entity_count are Oxford Ledge sums over the rows the crosswalk kept, and `dropped_unresolved` is an UPPER BOUND on that crosswalk's coverage gap -- it also counts unrelated name matches (a 'Lockheed ...' credit union), so it never says how many related entities were missed. [Requires API mode]",
+        "description": "Federal-contract obligation history for a ticker, OR the fiscal-year leaderboard -- for government-revenue-dependence diligence. TWO SHAPES, and one of `ticker` or `fiscal_year` is REQUIRED (neither raises INVALID_PARAMS; if both are given, `ticker` wins and `fiscal_year` is ignored). With `ticker`: {summary, ticker, as_of, obligations} where each row is {ticker, fiscal_year, total_obligations_usd (USD with cents -- units of dollars, not thousands), entity_count, recipients (each {name, uei, recipient_id, amount}; the TEN largest by amount -- when the year had more, `recipients_truncated: true` and `recipients_total` say so, and `entity_count` is always the full count), dropped_unresolved (how many awardee search hits the crosswalk did NOT attribute to this ticker -- read it before treating the total as complete), start_date, end_date, fetched_at, period_complete, days_elapsed, days_in_period}, NEWEST FY FIRST; `as_of` is the date USAspending was last read. A fiscal year whose end_date lies after `as_of` is PARTIAL (period_complete false, days_elapsed < days_in_period) and its total is year-to-date -- never compare it to a full year. `ueis` is no longer emitted (it duplicated recipients[].uei). With `fiscal_year` only: {summary, fiscal_year, leaderboard} of {ticker, fiscal_year, total_obligations_usd, entity_count, fetched_at}, largest first (the envelope carries period_complete / days_elapsed / days_in_period for the requested year). `limit` default 20, hard cap 100. Obligations are federal awards, not company-reported revenue. Obligations are the ISSUER's while the crosswalk keys one share class: a ticker with no rows whose share-class sibling has them is served the sibling's rows under the sibling's `ticker`, with `requested_ticker` carrying the symbol you asked for and the summary saying so; a ticker off the crosswalk honestly returns []. Source: USAspending.gov (public domain; OL ticker-crosswalked); FREE (no paywall on the hosted channel). ATTRIBUTION: the per-recipient amounts and UEIs are USAspending verbatim; attributing them to a TICKER is an Oxford Ledge curated crosswalk, the per-ticker total and entity_count are Oxford Ledge sums over the rows the crosswalk kept, and `dropped_unresolved` is an UPPER BOUND on that crosswalk's coverage gap -- it also counts unrelated name matches (a 'Lockheed ...' credit union), so it never says how many related entities were missed. [Requires API mode]",
         "inputSchema": {
             "type": "object",
             "properties": {

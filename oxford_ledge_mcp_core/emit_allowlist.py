@@ -138,6 +138,18 @@ _ENVELOPE_KEYS = frozenset({
     # Key NAMES only, no carve-out; mcp_provenance.attach_provenance is their
     # only producer (from tool identity, never from a payload).
     "derived_fields", "derived_basis", "ai_generated", "ai_generated_note",
+    # THE CACHE MARKER (2026-09-21, external live review of 3.6.0). The wheel's
+    # dispatch seam stamps a REPLAYED result `_meta.served_from_cache: true` +
+    # `_meta.cache_age_seconds` (oxford_ledge_mcp_core.cache.
+    # mark_served_from_cache); a fresh result carries neither. Frame
+    # vocabulary in the same sense as `response_size` above -- Oxford Ledge's
+    # own accounting of how it served the answer, no vendor lineage, no
+    # identifier. The wheel stamps AFTER its own filter, so admission here is
+    # for the hosted /mcp bridge (which applies this table to what the host
+    # serves) and for the day the host stamps its own replays: the names must
+    # be admitted for the two channels to agree. Admitted as CODE in the same
+    # change as the producer -- this filter drops silently.
+    "served_from_cache", "cache_age_seconds",
 })
 
 # Per-tool emitted-field allowlists (lowercase). A key absent here and
@@ -361,6 +373,16 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # `filerStatus` beside the `successorTicker` already admitted (BKCC -> TCPC).
         # Measured DROPPED by this filter before this edit. Our own disclosure.
         "markabovepar", "aboveparrowcount", "markbasis", "filerstatus",
+        # 2026-09-22 (OWNER ruling on the 3.6.0 external review, Pattern-T
+        # T11a/T14): the declared-page block `page` {limit, offset, returned,
+        # total, hasMore} plus the producer-supplied completeness block's
+        # `total_available` (`completeness`, `limit`, `returned`, `complete`,
+        # `completeness_basis`, `rows_key` are frame keys). Same five names,
+        # same meaning, as the search_bdc_borrower entry above -- one page
+        # idiom on both BDC surfaces. Admitted as CODE, in the same change as
+        # the producer: this filter drops silently, so a comment-only
+        # admission would ship a page block with no page in it.
+        "page", "offset", "total", "hasmore", "total_available",
     }),
     # 2026-09-05 moat-promotion vet L-2 (docs/board/audit/
     # 2026-09-05_CISO_COUNSEL_CHAOS_moat_promotion_vet.md): the three
@@ -457,6 +479,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # directory's holder count beside the per-call `holder_count`, so a
         # directory/roster disagreement is visible rather than silently the larger.
         "directory_holder_count",
+        # 2026-09-21 (Pattern-T T30): the active/ever split summed over the
+        # holder_ticker_status map; `holder_count` itself is unchanged.
+        "holder_count_active", "holder_count_ever",
     }),
     "ol_bdc_common_borrowers": frozenset({
         # envelope
@@ -655,6 +680,11 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         "total_obligations_usd", "uei", "ueis",
         # 2026-09-13 (deep audit f5-gov-feeds-6, wave D / D5): same sibling disclosure.
         "requested_ticker",
+        # 2026-09-21 (external live review of 3.6.0): the per-row recipients
+        # cap's disclosure pair -- `recipients` now carries the ten largest by
+        # amount and these two say when a year had more. OL accounting over
+        # USAspending rows, no vendor lineage; `entity_count` is unchanged.
+        "recipients_truncated", "recipients_total",
     }),
 
     # The emitted `applicant_name` is USPTO's own `firstApplicantName`
@@ -699,6 +729,21 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # 2026-09-13 (deep audit f4-bdc-derived-17, wave D / D4): an INACTIVE filer's
         # frozen final filing is labelled, with its successor where one exists.
         "filer_status", "successor_ticker",
+        # 2026-09-21 (Pattern-T T2/T3b, the READ-layer quarantine): rows held
+        # out of the rankings with a `reason` (already admitted), the per-BDC
+        # held-out count, the thresholds that define the hold-out and the
+        # closed reason vocabulary -- the three codes are fixed key NAMES of
+        # the `suspect_reasons` map, not data. All OL's own accounting.
+        "suspect_moves", "suspect_moves_completeness", "suspect_moves_found",
+        "max_abs_mark_delta_pts", "debt_mark_band_pts", "quarantine_basis",
+        "suspect_reasons", "mark_at_par_exactly", "delta_exceeds_threshold",
+        "prior_or_latest_outside_debt_band",
+        # `suspect_moves_completeness` is the first block on this tool built
+        # with a KNOWN total (`_completeness(..., total=)`); the frame set
+        # admits `complete` / `returned` / `limit` but not this one key, and
+        # the wire test dropped it on the first run -- admitted like the
+        # top_borrowers entry does.
+        "total_available",
     }),
 
     # OL PARSE -- `pg_get_bdc_non_accrual_share` reads `bdc_holdings` only
