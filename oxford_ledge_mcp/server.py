@@ -161,6 +161,8 @@ from oxford_ledge_mcp_core.cache import _TOOL_CACHE, _CACHE_LOCK
 from oxford_ledge_mcp_core.response_budget import RESPONSE_BUDGET_CHARS, attach_response_size
 from oxford_ledge_mcp_core.cache import cache_lookup as _cache_lookup_core, mark_served_from_cache
 from oxford_ledge_mcp.meta_table import standalone_meta
+# MCP-E (2026-09-26): the caveats cut from the descriptions (leaf data module).
+from oxford_ledge_mcp.tool_notes import attach_tool_notes
 # Leaf helper, no @mcp_tool: importing it cannot move TOOL_DISPATCH.
 from oxford_ledge_mcp.holders_fold import (  # noqa: F401  (re-exported)
     NO_FOLD as _NO_FOLD,
@@ -723,31 +725,11 @@ from oxford_ledge_mcp.sec_tools import (  # noqa: F401  (re-exports)
 )
 
 
-# 2026-09-05 field-report-#2 F5-d: Form 4 transaction codes shipped as raw
-# SEC letters ("P", "F") with no decode ring anywhere in the chain. Labels
-# verified against the ingest writer's own code domain
-# (tools/fetch_form4_transactions.py TRANSACTION_CODES -- the 18 codes it
-# classifies); is_open_market mirrors that map exactly (True only for P/S).
-_FORM4_CODE_LABELS = {
-    "P": "Open-market purchase",
-    "S": "Open-market sale",
-    "A": "Award/grant",
-    "D": "Disposition to issuer",
-    "F": "Tax withholding",
-    "M": "Option exercise/conversion",
-    "G": "Gift",
-    "J": "Other",
-    "K": "Equity swap",
-    "U": "Tender of shares",
-    "W": "Acquisition/disposition by will or inheritance",
-    "X": "In-the-money option exercise",
-    "Z": "Deposit into/withdrawal from voting trust",
-    "C": "Conversion of derivative security",
-    "I": "Discretionary transaction",
-    "O": "Out-of-the-money option exercise",
-    "H": "Expiration of long derivative position",
-    "L": "Small acquisition (Rule 16a-6)",
-}
+# `_FORM4_CODE_LABELS` + the B5 window/price helpers live in insider_window.py
+# (2026-09-26 MCP-B: this file sits at the 2,000-line threshold). Re-exported.
+from oxford_ledge_mcp.insider_window import (  # noqa: F401  (re-exports)
+    _FORM4_CODE_LABELS, INSIDER_DEFAULT_LIMIT, completeness_basis, empty_scope_note,
+    price_applicable, rows_in_window, window_may_be_truncated)
 
 
 def _cents(v):
@@ -761,10 +743,10 @@ def _cents(v):
     return round(v, 2) if isinstance(v, float) else v
 
 
-# The producing helper's window: pg_get_insider_activity(ticker, limit=20),
-# `ORDER BY filing_date DESC LIMIT 20` (pg_db/queries/insiders.py); the route
-# passes no limit. `totalFetched` can therefore never exceed 20 and is NOT
-# the issuer's Form 4 history -- b03-ownership-11 (3.4.0 vet).
+# The producing helper's DEFAULT window: pg_get_insider_activity(ticker,
+# limit=20) (pg_db/queries/insiders.py). Since MCP-B B5 (2026-09-26) the tool
+# passes `limit` (1-100) and `days`; `totalFetched` is that window, never the
+# issuer's Form 4 history -- b03-ownership-11 (3.4.0 vet).
 _INSIDER_ROUTE_WINDOW = 20
 
 _INSIDER_COMPLETENESS_BASIS = (
@@ -795,7 +777,12 @@ def tool_get_insider_trades(args):
     # Refuse BEFORE any fetch.
     if not ticker:
         raise ToolError(ToolError.INVALID_PARAMS, "ticker is required")
-    data = _api_get("/api/insider-activity", {"ticker": ticker})
+    # MCP-B B5 (2026-09-26): `limit` (1-100) + `days`; bounds refused at the seam.
+    limit = INSIDER_DEFAULT_LIMIT if args.get("limit") is None else int(args["limit"])
+    days = None if args.get("days") is None else int(args["days"])
+    data = _api_get("/api/insider-activity", {"ticker": ticker, **(
+        {"limit": limit} if args.get("limit") is not None else {}), **(
+        {"days": days} if days is not None else {})})
     if not isinstance(data, dict):
         return non_object_response(ticker, "trades", "insider transactions", "/api/insider-activity", data)
     raw = data.get("transactions") or data.get("trades") or []
@@ -807,7 +794,7 @@ def tool_get_insider_trades(args):
     # and only the completeness block admitted it. The cut is the route's
     # own window now, so the sentence is true and `complete` keeps its
     # b03-ownership-11 meaning (null when the window came back full).
-    for row in raw[:_INSIDER_ROUTE_WINDOW]:
+    for row in rows_in_window(raw, limit, days):
         # 2026-08-10 field test #2: the wire contract is camelCase
         # (schemas/responses.py InsiderActivityTxn: insiderName /
         # transactionType) — the old chains read keys the API never emits,
@@ -847,6 +834,8 @@ def tool_get_insider_trades(args):
             "shares": _safe(row.get("shares") or row.get("transactionShares")),
             # b03-ownership-9: the FILED price, unrounded (see _cents).
             "pricePerShare": _safe(row.get("pricePerShare")),
+            # B5: false for A/G/J/W/Z filed at 0 -- the 0 is "no price", kept verbatim.
+            "priceApplicable": price_applicable(code, row.get("pricePerShare")),
             "value": _cents(_safe(row.get("totalValue") or row.get("value") or row.get("transactionValue"))),
             "sharesOwned": _safe(row.get("sharesOwned")),
             "type": code,
@@ -875,7 +864,7 @@ def tool_get_insider_trades(args):
         })
     fault = _route_fault(data, ticker, "trades", "insider transactions",
                          "/api/insider-activity")
-    window_full = len(raw) >= _INSIDER_ROUTE_WINDOW
+    window_full = window_may_be_truncated(len(raw), limit)
     out = {"ticker": ticker, "trades": trades,
            # F5 (2026-09-05): the (then [:15]) cut was silent -- same
            # returned/total discipline as the ol_bdc_* completeness block.
@@ -888,12 +877,12 @@ def tool_get_insider_trades(args):
                "returned": len(trades),
                "totalFetched": len(raw),
                "complete": None if (fault or window_full) else True,
-               "completeness_basis": _INSIDER_COMPLETENESS_BASIS,
+               "completeness_basis": completeness_basis(limit, days, _INSIDER_COMPLETENESS_BASIS),
            }}
     if fault:
         out["error"] = fault
     elif not trades:
-        out["note"] = _INSIDER_EMPTY_SCOPE_NOTE.format(ticker=ticker)
+        out["note"] = empty_scope_note(ticker, limit, days, _INSIDER_EMPTY_SCOPE_NOTE)
     # `_meta` passthrough: same reason as tool_get_holders -- with the
     # derived paths renamed to THIS payload's keys (d2-wheel-prose-3).
     if isinstance(data.get("_meta"), dict):
@@ -1666,6 +1655,9 @@ def _execute_tool_with_limits(tool_name, args):
         # entry first; this is for the day CI is not in the loop. Before
         # _cache_set, so the cache holds the projection that ships.
         result = filter_to_allowlist(tool_name, result)
+        # MCP-E: the wheel's own moved caveats (REPLACING any hosted copy a
+        # name-proxied answer carried), after the filter, before the cache.
+        result = attach_tool_notes(tool_name, result)
         # CV-2 (2026-09-12): the four standalone tools cross no hosted seam
         # and carried no `_meta`. Attached iff the result has none, after the
         # filter (envelope vocabulary either way), before the disclosure.

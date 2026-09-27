@@ -150,6 +150,18 @@ _ENVELOPE_KEYS = frozenset({
     # be admitted for the two channels to agree. Admitted as CODE in the same
     # change as the producer -- this filter drops silently.
     "served_from_cache", "cache_age_seconds",
+    # THE MOVED CAVEATS (MCP-E, 2026-09-26; OWNER R-MCP-AWARE ruling 3). The
+    # tool descriptions were cut to ~1,200 chars and every caveat they carried
+    # beyond the one a caller needs BEFORE calling moved into the response
+    # under `tool_notes` (mcp_tool_notes.py on the host, oxford_ledge_mcp.
+    # tool_notes in the wheel). COUNSEL's condition was that licence / basis /
+    # "not verified" notices move into the response, not into silence -- and
+    # this filter drops silently, so the name is admitted in the same change
+    # as its producers. Oxford Ledge's own prose about its own tools: no vendor
+    # lineage, no identifier. Deliberately NOT `notes`, which is a DATA field
+    # name elsewhere (borrower profiles, FRED metadata) and would be admitted
+    # at every depth of every filtered payload.
+    "tool_notes",
 })
 
 # Per-tool emitted-field allowlists (lowercase). A key absent here and
@@ -168,8 +180,11 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # builders put on the wire; each named in its Pattern-K artifact.
         "coverage", "rows_stored", "oldest_event_date", "newest_event_date",
         "events", "eventdate", "eventtype", "headline",
-        "description", "amount", "counterparty", "counterpartyticker",
-        "status", "sourceurl", "source",
+        "description", "counterparty", "counterpartyticker",
+        "sourceurl", "source",
+        # 2026-09-26 MCP-B B3: `amount` and `status` DROPPED -- no writer ever
+        # filled them (always null); pg_get_corporate_events no longer selects
+        # them. `counterparty` now carries SF-6's ma_counterparty (>= 0.5, CHAOS 2026-09-26).
     }),
     # The 13F parser's row keys + the serving
     # ticker enrichment; `cusip` deliberately ABSENT (the carve-out).
@@ -207,6 +222,12 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # answer the route comment says it exists to prevent. OL response
         # accounting, no vendor lineage.
         "changestotals", "changestruncated",
+        # 2026-09-26 (external MCP audit, MCP-A / A4): `filedName` -- the
+        # nameOfIssuer AS FILED, present only when the served `name` differs
+        # (Berkshire files NYT common 650111107 as 'NEW YORK TIMES CO MTN BE';
+        # the served name drops the filer's note label, the filed one stays
+        # visible). 13F-HR-native, no vendor lineage.
+        "filedname",
     }),
     # 2026-09-05 (external field-test F4 remainder): seeded from the
     # producing route's emitted keys (/api/bdc/borrower-mark-history --
@@ -274,6 +295,11 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # allowlist admits the value; it never re-decides the label -- that
         # rule lives once, producer-side, for every channel.
         "description", "descriptionsource", "error", "fairvalue", "filingdate",
+        # OWNER R-DESC-PULL (2026-09-26): the withheld-on-this-channel sentence
+        # that replaces a research-written description for an anonymous caller
+        # (mcp_redistribution.strip_research_descriptions), and the model's
+        # cited pages where the row recorded them (v255 source_urls).
+        "descriptionwithheld", "descriptionsources",
         "filingtype", "found", "holdercount", "holdercountbasis",
         "holders", "holderstatus", "holdingrowcount", "industry",
         "industrybasis", "industrytagcount", "interestrate", "lienposition",
@@ -451,6 +477,13 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # keys_survive_filter_contract.py, which runs the in-tree handler's
         # output through this filter and asserts no lender-row key is lost.
         "filer_status", "successor_ticker",
+        # 2026-09-26 MCP-D (external MCP audit D6/D7, mcp_tools/moat_reads.py):
+        # one row per LENDER with its tranches nested, the lender/tranche
+        # counts, the stale opt-in and its excluded count, and the
+        # commitment-basis mark label. OL parse of SEC SOI filings.
+        "tranches", "tranche_count", "lender_count", "lender_row_basis",
+        "par_amount", "cost_amount", "mark_basis", "mark_basis_note",
+        "include_stale", "stale_lenders_excluded", "rows_commitment_basis",
     }),
     "ol_bdc_top_borrowers": frozenset({
         # envelope
@@ -571,6 +604,8 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # 3.7.1 (65ef9275): the same issuer-self-filed label the feed serves;
         # always false on this screen (its WHERE already drops those rows).
         "issuerselffiled",
+        # MCP-B B4 (2026-09-26): the filters echoed in the envelope.
+        "common_only", "min_value",
     }),
 
     # `sec_ftd`. COUNSEL flagged that the STORE holds CUSIP
@@ -712,6 +747,11 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # 2026-09-13 (deep audit f5-gov-feeds-6, wave D / D5): rows served under a
         # share-class sibling (GOOG -> GOOGL) name the class asked for.
         "requested_ticker",
+        # MCP-C C2 (external MCP audit 2026-09-26): the ingest freshness
+        # (MAX ingested_at over the served rows -- the per-row stamp stays
+        # stripped) and the honest name for patent_number on a continuation
+        # row (the granted PARENT's number; the old key stays beside it).
+        "last_ingested_at", "parent_patent_number",
     }),
 
     # OL PARSE -- `pg_get_bdc_qoq_diff_rows` reads `bdc_holdings` only
@@ -912,6 +952,8 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         "maturities_with_prior", "name", "oneyearago", "reason", "series",
         "threemonthsago", "value", "yield_curve", "yield_curve_1y_ago",
         "ytdchange",
+        # MCP-C C6 (COUNSEL, 2026-09-26): the FRED terms-of-use notice.
+        "fred_notice",
     }),
 
     # The hosted tool is KEY-ONLY (anonymous -> "not available to anonymous
@@ -929,6 +971,8 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         "_source", "available", "available_count", "data", "date",
         "frequency", "name", "note", "observation", "series", "units",
         "value", "ytdchange",
+        # MCP-C C6 (COUNSEL, 2026-09-26): the FRED terms-of-use notice.
+        "fred_notice",
     }),
 
     # A: hosted anonymous /mcp, random (26 keys) + category (5). B: REST
@@ -1005,6 +1049,10 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # summary block
         "sharecountchange10yr", "dilutiveyears", "totaldividends",
         "totalnetbuybacks", "totalnetdebt", "totalacquisitions",
+        # MCP-C C5 (external MCP audit 2026-09-26): the filed gross
+        # repurchase line beside the netBuybacks dilution proxy, and its
+        # window sum -- null when untagged, never 0.
+        "grossrepurchases", "totalgrossrepurchases",
         # THE SCORECARD'S BASIS (2026-09-13 deep audit f1-sec-fundamentals-1 /
         # d3-hosted-catalog-2 BLOCK, wave D / D1). The tool now serves `periods`
         # beside `years`, a `basis` block with the SAME vocabulary get_fundamentals
@@ -1035,6 +1083,13 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         "quarter", "filingdate", "vintages", "count", "rankingbasis",
         "coverage", "shares_13f", "fund_count", "shares_outstanding", "pct",
         "basis", "overstated",
+        # 2026-09-26 (external MCP audit, MCP-A / A3 + A1): the coverage
+        # block's denominator vintage (`shares_outstanding_period`, 'FY2025'
+        # -- an ANNUAL count beside a 13F quarter) and the count of another
+        # share class's rows the aggregate stopped summing
+        # (`other_class_rows_excluded`, present only while the store still
+        # keys that class under this ticker). Our own accounting.
+        "shares_outstanding_period", "other_class_rows_excluded",
         # 2026-09-12 (3.4.0 vet b03-ownership-2): the empty-branch SCOPE
         # note. `note` is NOT an _ENVELOPE_KEYS member (`notice` is), and the
         # first cut of this change measured the sentence stripped by this very
@@ -1113,6 +1168,9 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # only when the host sent it -- absent means an older host (unknown),
         # never false. Oxford Ledge's comparison of two as-filed CIKs.
         "issuerselffiled",
+        # 2026-09-26 MCP-B B5: false when a no-price code (A/G/J/W/Z) was filed
+        # at 0 -- the filed 0 stays verbatim; the flag says it means no price.
+        "priceapplicable",
     }),
 
     # PIP-ONLY. The wheel builds this from SEC's submissions API itself:

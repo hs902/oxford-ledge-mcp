@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oxford-ledge-mcp"
-version = "3.7.1"
+version = "3.8.0"
 description = "MCP server for Oxford Ledge — 29 tools built on U.S.-government public data (SEC EDGAR, FRED, U.S. Treasury, FDIC, USAspending, USPTO, CFTC): 28 served as filed or as Oxford Ledge derivations of it, plus 1 Oxford Ledge-authored value-investing corpus of attributed paraphrases — for SEC filings, fundamentals, institutional & insider ownership, macro rates, and BDC/private-credit holdings from Claude Desktop"
 readme = "README.md"
 # PEP 639: SPDX expression + explicit license file (replaces the deprecated
@@ -39,6 +39,8 @@ mcp = ["mcp>=1.0.0,<2"]  # <2: the 2.0 major removed the low-level Server API th
 Homepage = "https://www.oxfordledge.com"
 Repository = "https://github.com/hs902/oxford-ledge-mcp"
 Documentation = "https://www.oxfordledge.com/mcp"
+"Setup guide" = "https://www.oxfordledge.com/mcp#setup"
+Changelog = "https://github.com/hs902/oxford-ledge-mcp/blob/main/CHANGELOG.md"
 
 [project.scripts]
 oxford-ledge-mcp = "oxford_ledge_mcp.server:main"

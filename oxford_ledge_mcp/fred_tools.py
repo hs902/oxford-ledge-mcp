@@ -108,6 +108,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import functools
+
 from oxford_ledge_mcp_core import FUNDAMENTAL, ToolError, mcp_tool
 from oxford_ledge_mcp_core.errors import _JSON_TYPE_NAMES
 from oxford_ledge_mcp_core.body_limits import (
@@ -515,7 +517,24 @@ def _yc_all_failed_error(failed: dict) -> ToolError:
         f"{_yc_failure_sentence(failed)}. Not a statement about the data.")
 
 
+def _with_fred_notice(fn):
+    """MCP-C C6 (COUNSEL, 2026-09-26): stamp the FRED terms-of-use notice as
+    `fred_notice` on every dict payload, so no return path can forget it.
+    The literal lives in meta_table (the standalone attribution table);
+    imported lazily so this module keeps no import-time sibling edge."""
+    @functools.wraps(fn)
+    def wrapper(args):
+        result = fn(args)
+        if isinstance(result, dict):
+            from oxford_ledge_mcp.meta_table import FRED_NOTICE
+            result = dict(result)
+            result["fred_notice"] = FRED_NOTICE
+        return result
+    return wrapper
+
+
 @mcp_tool(name="get_yield_curve", cache=FUNDAMENTAL)
+@_with_fred_notice
 def tool_get_yield_curve(args):
     """Get Treasury yield curve from FRED.
 
@@ -836,6 +855,7 @@ def _fred_series_is_thirdparty(series: str, key: str) -> str:
 
 
 @mcp_tool(name="get_fred_data", cache=FUNDAMENTAL)
+@_with_fred_notice
 def tool_get_fred_data(args):
     """Get FRED economic data series (U.S.-government / public-domain series only).
 

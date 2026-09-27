@@ -88,12 +88,28 @@ def measure(result: Any) -> int:
         return 0
 
 
-def _size_block(tool_name: str, chars: int, budget_chars: int, has_limit: bool) -> dict[str, Any]:
+def _tool_notes_chars(result: Any) -> int:
+    """Chars the `tool_notes` entry adds (0 if absent): `{"tool_notes": [...]}`
+    is exactly the entry plus one `, ` separator in the compact dump."""
+    if not isinstance(result, dict) or "tool_notes" not in result:
+        return 0
+    try:
+        return len(json.dumps({"tool_notes": result["tool_notes"]}, default=str))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _size_block(tool_name: str, chars: int, budget_chars: int, has_limit: bool,
+                judged_chars: int | None = None) -> dict[str, Any]:
+    # MCP-E (CHAOS 2026-09-26 TRACK-2): `chars` is the WHOLE payload;
+    # `over_budget` judges the DATA (`judged_chars`, without the `tool_notes`
+    # the seam attaches) -- `limit`, the lever the hint names, cannot remove them.
+    judged = chars if judged_chars is None else judged_chars
     block: dict[str, Any] = {
         "chars": chars,
         "approx_tokens": chars // CHARS_PER_TOKEN,
         "budget_chars": budget_chars,
-        "over_budget": chars > budget_chars,
+        "over_budget": judged > budget_chars,
     }
     if block["over_budget"]:
         # Name the lever. A warning a caller cannot act on is noise. The
@@ -132,7 +148,8 @@ def attach_response_size(
     chars = measure(result)
     if not chars:
         return result
-    block = _size_block(tool_name, chars, budget_chars, has_limit)
+    block = _size_block(tool_name, chars, budget_chars, has_limit,
+                        judged_chars=chars - _tool_notes_chars(result))
     meta = result.get("_meta")
     if isinstance(meta, dict):
         meta.setdefault("response_size", block)

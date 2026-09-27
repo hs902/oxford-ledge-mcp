@@ -1,0 +1,60 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.oxfordledge/oxford-ledge",
+  "title": "Oxford Ledge",
+  "description": "Ask your assistant; it reads the public record: SEC filings, 13F, insider trades, BDC loans.",
+  "version": "3.8.0",
+  "websiteUrl": "https://www.oxfordledge.com/mcp",
+  "repository": {
+    "url": "https://github.com/hs902/oxford-ledge-mcp",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://www.oxfordledge.com/mcp",
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "description": "Optional. An ol_live_ key from https://www.oxfordledge.com/mcp#get-your-key. Without it the anonymous tools answer; with it, the tools your plan's tier allows.",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "oxford-ledge-mcp",
+      "version": "3.8.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "OXFORD_LEDGE_URL",
+          "description": "Set to https://www.oxfordledge.com to reach the hosted data. Without it only the standalone SEC-EDGAR and FRED tools answer.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "OXFORD_LEDGE_API_KEY",
+          "description": "Optional ol_live_ key from https://www.oxfordledge.com/mcp#get-your-key; needed only for the Researcher-tier tools.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "FRED_API_KEY",
+          "description": "Optional free FRED key; enables the standalone FRED tools.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

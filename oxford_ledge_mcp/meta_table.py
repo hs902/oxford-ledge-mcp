@@ -52,6 +52,13 @@ _SEC_BROWSE = ("https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
 _FRED = "FRED (Federal Reserve Bank of St. Louis)"
 _FRED_ROOT = "https://fred.stlouisfed.org/"
 _FRED_SERIES = "https://fred.stlouisfed.org/series/{series}"
+#: MCP-C C6 (COUNSEL, external MCP audit 2026-09-26): the notice the FRED API
+#: terms of use ask every product built on the API to carry. fred_tools.py
+#: stamps it as the top-level `fred_notice` on every get_yield_curve /
+#: get_fred_data payload (NOT inside `_meta`, whose key set is pinned to the
+#: hosted provenance block). The hosted twin is mcp_tools/macro_reads.FRED_NOTICE.
+FRED_NOTICE = ("This product uses the FRED\u00ae API but is not endorsed or "
+               "certified by the Federal Reserve Bank of St. Louis.")
 # COUNSEL-C3 (/mcp vet): the DATA is US-Treasury constant-maturity yields,
 # DELIVERED via FRED's DGS series -- name both, credit neither as author.
 _TREASURY_VIA_FRED = "U.S. Treasury constant-maturity yields (via FRED DGS series)"

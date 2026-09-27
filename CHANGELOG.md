@@ -5,6 +5,14 @@ All notable changes to `oxford-ledge-mcp` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.8.0 (2026-09-27)
+
+Published on the OWNER's go-ahead of 2026-09-27. It also carries every change in the 3.7.2 cut below, which was never published on its own: upgrading from 3.7.1 gets both. External MCP audit follow-up MCP-E (OWNER R-MCP-AWARE). **Changed:** every tool description is a short card of at most 1,300 characters (the 29 went from about 70,900 to about 23,700 characters); the caveats moved out of the descriptions into a per-response `tool_notes` list placed near the head of the payload, and the licence, redistribution and refusal notices stay verbatim in the descriptions. **Changed:** `response_size.over_budget` judges the data without `tool_notes`; `chars` still reports the whole payload. No tool, argument or data key is renamed or removed.
+
+### Included from the 3.7.2 cut (2026-09-26; folded into 3.8.0, never published separately)
+
+Landing on `main` ahead of the 3.7.2 publish (the tree says 3.7.2; PyPI still serves 3.7.1 and the publish is OWNER-gated). External MCP-tool audit 2026-09-26, packages MCP-A, MCP-B and MCP-C. Removed: `amount` / `status` on `get_corporate_events` (never filled). New keys: `filedName` (`get_13f_holdings`); `shares_outstanding_period`, `other_class_rows_excluded` (`get_holders`); `priceApplicable` (`get_insider_trades`); `grossRepurchases`, `totalGrossRepurchases` (`get_capital_allocation`); `last_ingested_at`, `parent_patent_number` (`ol_patents`); `fred_notice` (`get_fred_data`, `get_yield_curve`). New arguments: `limit`, `days` (`get_insider_trades`); `common_only`, `min_value` (`ol_insider_recent_buys`). Host-side: 13F share classes are no longer mixed. MCP-D + the borrower-description takedown: `ol_bdc_borrower_dispersion` is lender-grain (`tranches`, `lender_count`, `tranche_count`, `lender_row_basis`, `par_amount`, `cost_amount`, `include_stale`, `stale_lenders_excluded`, `mark_basis`, `mark_basis_note`; `count` counts lenders); `parseQuality` is `suspect` when the fair value is refused; `descriptionWithheld` / `descriptionSources` on borrower descriptions.
+
 ## 3.7.1 (2026-09-25)
 
 Everything under this heading landed on `main` after the 3.7.0 publish
