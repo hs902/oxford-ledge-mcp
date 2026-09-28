@@ -5,6 +5,14 @@ All notable changes to `oxford-ledge-mcp` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.8.1 (2026-09-27)
+
+A patch release on 3.8.0, cut from the external MCP re-audit of 2026-09-27 (the auditor's client ran 3.7.1); the OWNER greenlit its publish the same day. Nothing under `mcp_package/` changed between the 3.8.0 export and this cut except what is listed here. No tool, argument, schema bound or data key is added, renamed or removed.
+
+- **Changed -- a versioned User-Agent (re-audit B1(b)).** Every request this package sends to Oxford Ledge -- `_api_get` (the REST proxy), the keyed leg (POST `/api/mcp/tool`) and the keyless leg (POST `/mcp`) -- now sends `OxfordLedgeMCP/1.0 (oxford-ledge-mcp 3.8.1)`, built by the new `transport._user_agent()` from the package's own `__version__`, instead of the constant `OxfordLedgeMCP/1.0` sent from 1.x through 3.8.0. The `OxfordLedgeMCP/1.0` product token is unchanged, so the Oxford Ledge edge admits the new form exactly as it admitted the old one. Requests to SEC EDGAR and FRED are unchanged.
+- **Changed -- `get_corporate_events` notes (CHAOS C1 review, F8).** The tool's `tool_notes` gain one entry: an empty (or null) `description` is a filing whose text has not been read yet (not fetched, or it could not be extracted), never a filing that says nothing -- open `sourceUrl` to read it. The hosted server's notes for the same tool carry the same sentence.
+- **Docs.** The README (the PyPI page) notes the official MCP Registry listing, `com.oxfordledge/oxford-ledge`, with this package and, as its remote, the hosted server at `https://www.oxfordledge.com/mcp`. `server.json` (the registry descriptor, not in the wheel) names 3.8.1.
+
 ## 3.8.0 (2026-09-27)
 
 Published on the OWNER's go-ahead of 2026-09-27. It also carries every change in the 3.7.2 cut below, which was never published on its own: upgrading from 3.7.1 gets both. External MCP audit follow-up MCP-E (OWNER R-MCP-AWARE). **Changed:** every tool description is a short card of at most 1,300 characters (the 29 went from about 70,900 to about 23,700 characters); the caveats moved out of the descriptions into a per-response `tool_notes` list placed near the head of the payload, and the licence, redistribution and refusal notices stay verbatim in the descriptions. **Changed:** `response_size.over_budget` judges the data without `tool_notes`; `chars` still reports the whole payload. No tool, argument or data key is renamed or removed.

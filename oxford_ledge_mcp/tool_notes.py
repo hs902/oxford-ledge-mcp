@@ -415,6 +415,11 @@ TOOL_NOTES: dict[str, tuple[str, ...]] = {
             "when one was found); `sourceUrl` is the EDGAR filing."
         ),
         (
+            "An empty (or null) `description` is a filing whose text has not "
+            "been read yet (not fetched, or it could not be extracted), never "
+            "a filing that says nothing: open `sourceUrl` to read it."
+        ),
+        (
             "`counterparty` is the other party Oxford Ledge's M&A interpreter "
             "read from an acquisition_disposition filing (served only at 0.5 "
             "confidence or above), else null; `counterpartyTicker` is always "

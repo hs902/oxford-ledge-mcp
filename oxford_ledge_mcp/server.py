@@ -353,6 +353,7 @@ from oxford_ledge_mcp.transport import (  # noqa: F401  (re-exports)
     _quoted_host_prose,
     _framed_not_found,
     _is_loopback_host,
+    _user_agent,
     _authenticated_request,
     # 2026-09-21 loopback proxy leak: the no-environment-proxy opener the
     # key-carrying plain-http (loopback) legs open through, and the open()

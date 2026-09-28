@@ -205,6 +205,23 @@ def _is_loopback_host(url):
     return addr.is_loopback
 
 
+def _user_agent():
+    """The User-Agent every Oxford Ledge request from this package sends.
+
+    3.8.1 (external MCP re-audit 2026-09-27, B1(b)): the header was the
+    constant `OxfordLedgeMCP/1.0` from 1.x to 3.8.0, so a server log could
+    not tell which package version made a call, and a report about an old
+    wheel (the re-audit's client ran 3.7.1) could not be matched to it. The
+    version now rides in a trailing comment. The `OxfordLedgeMCP/1.0` product
+    token is kept byte-for-byte: it is the form the Oxford Ledge edge admits
+    (the versioned form measured 200 on 2026-09-27, a curl UA 403). The
+    version is read at call time from the package's own `__version__`, the
+    one literal the release contracts tie to pyproject.toml.
+    """
+    from oxford_ledge_mcp import __version__
+    return f"OxfordLedgeMCP/1.0 (oxford-ledge-mcp {__version__})"
+
+
 def _authenticated_request(url, data=None, headers=None):
     """The urllib Request for a call that carries the operator's key.
 
@@ -219,7 +236,7 @@ def _authenticated_request(url, data=None, headers=None):
     the call is refused loudly. http://localhost:10000 (README) stays fine.
     """
     from oxford_ledge_mcp import server as _S  # call-time read: tests set S._API_URL / S._API_KEY
-    hdrs = {"User-Agent": "OxfordLedgeMCP/1.0"}
+    hdrs = {"User-Agent": _user_agent()}
     if headers:
         hdrs.update(headers)
     req = urllib.request.Request(url, data=data, headers=hdrs)
@@ -1148,7 +1165,7 @@ def _api_tool_call_keyless(tool, arguments, timeout):
         f"{_S._API_URL}/mcp",
         data=data,
         headers={
-            "User-Agent": "OxfordLedgeMCP/1.0",
+            "User-Agent": _user_agent(),
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
