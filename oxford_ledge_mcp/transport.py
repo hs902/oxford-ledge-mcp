@@ -600,16 +600,17 @@ def _api_get(path, params=None, timeout=15):
                    # not exist; the key lives in YOUR API KEYS -- the same
                    # sentence the hosted anon-tool refusal carries
                    # (routes_mcp_public_fastapi.py). Wave I / I5 (2026-09-13,
-                   # the OWNER's own correction): the panel is reached from the
-                   # bottom bar (the key icon, or K), NOT through
+                   # the OWNER's own correction): the panel is reached with K or
+                   # Settings -> API keys (the bottom-bar key icon went with the
+                   # bar, OWNER 2026-09-28; wording fixed in 3.8.2), NOT through
                    # /?view=settings; /?panel=api-keys (wave H, 51794d18) opens
                    # it directly for a signed-in user. Class contract:
                    # tests/test_api_key_pointer_surfaces_contract.py.
                    "The client's operator sets OXFORD_LEDGE_API_KEY (keys are "
                    "created at https://www.oxfordledge.com/?panel=api-keys "
                    "under YOUR API KEYS, which a signed-in operator also "
-                   "reaches by pressing K or clicking the key icon in the "
-                   "bottom bar; there is no /account page) — without "
+                   "reaches by pressing K or opening Settings -> API keys; "
+                   "there is no /account page) — without "
                    "one this client is anonymous and only the free public-data "
                    "tools work.")
                 + _NO_ASK,
@@ -822,8 +823,9 @@ _OL_PUBLIC_ORIGIN = "https://www.oxfordledge.com"
 #: Where a key is created: the /?panel=api-keys deep link (wave H, 51794d18)
 #: opens YOUR API KEYS directly for a signed-in user. It was /?view=settings
 #: until wave I / I5 (2026-09-13) -- the OWNER's correction: the panel is
-#: reached from the bottom bar (the key icon, or K), and the settings view
-#: only carried a row pointing at it.
+#: reached with K or Settings -> API keys (the bottom-bar key icon was removed
+#: with the bar on 2026-09-28), and the settings view only carried a row
+#: pointing at it.
 _OL_KEYS_URL = _OL_PUBLIC_ORIGIN + "/?panel=api-keys"
 
 
@@ -886,7 +888,7 @@ def _tier_refusal_message(body, keyed):
             f"an Oxford Ledge plan that includes the {tier} tier, the fix is "
             f"to set OXFORD_LEDGE_API_KEY in the client config (keys are "
             f"created at {_OL_KEYS_URL} under YOUR API KEYS -- press K or "
-            f"click the key icon in the bottom bar once signed in); otherwise "
+            f"open Settings -> API keys once signed in); otherwise "
             f"upgrade at {upgrade}."
             + (f" Host: {host_sentence}" if host_sentence else "")
             + _NO_ASK_OPERATOR)

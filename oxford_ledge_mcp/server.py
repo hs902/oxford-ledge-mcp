@@ -1238,7 +1238,7 @@ def tool_ol_bdc_credit_quality(args):
 
 @mcp_tool(name="get_debt_maturities", cache=FUNDAMENTAL, heavy=True, min_tier="plus")
 def tool_get_debt_maturities(args):
-    """Name-proxy to the hosted get_debt_maturities (SEC EDGAR 10-K/20-F footnote parse; Plus tier -- keyed leg)."""
+    """Name-proxy to the hosted get_debt_maturities (SEC EDGAR 10-K/20-F footnote parse; Researcher tier -- keyed leg)."""
     return filter_to_allowlist(
         "get_debt_maturities",
         _api_tool_call("get_debt_maturities", args))
@@ -1246,7 +1246,7 @@ def tool_get_debt_maturities(args):
 
 @mcp_tool(name="get_capital_allocation", cache=FUNDAMENTAL, heavy=True, min_tier="plus")
 def tool_get_capital_allocation(args):
-    """Name-proxy to the hosted get_capital_allocation (SEC EDGAR XBRL scorecard: up to 30 fiscal-year labels, 10-year summary window; Plus tier -- keyed leg)."""
+    """Name-proxy to the hosted get_capital_allocation (SEC EDGAR XBRL scorecard: up to 30 fiscal-year labels, 10-year summary window; Researcher tier -- keyed leg)."""
     return filter_to_allowlist(
         "get_capital_allocation",
         _api_tool_call("get_capital_allocation", args))

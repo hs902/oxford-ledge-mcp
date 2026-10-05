@@ -3,7 +3,7 @@
   "name": "com.oxfordledge/oxford-ledge",
   "title": "Oxford Ledge",
   "description": "Ask your assistant; it reads the public record: SEC filings, 13F, insider trades, BDC loans.",
-  "version": "3.8.1",
+  "version": "3.8.2",
   "websiteUrl": "https://www.oxfordledge.com/mcp",
   "repository": {
     "url": "https://github.com/hs902/oxford-ledge-mcp",
@@ -28,7 +28,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "oxford-ledge-mcp",
-      "version": "3.8.1",
+      "version": "3.8.2",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

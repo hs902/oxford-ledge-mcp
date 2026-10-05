@@ -525,6 +525,10 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # 2026-09-21 (Pattern-T T30): the active/ever split summed over the
         # holder_ticker_status map; `holder_count` itself is unchanged.
         "holder_count_active", "holder_count_ever",
+        # MCP output audit 2026-10-05 (P1-13): the cross-holder fair-value sum
+        # is ACTIVE holders only; these two say which basis a row took and how
+        # much frozen inactive-filer mark was left out. Scalars, OL accounting.
+        "fair_value_holders", "inactive_holder_fair_value",
     }),
     "ol_bdc_common_borrowers": frozenset({
         # envelope
@@ -851,11 +855,12 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         "coverage", "coveragenote", "currentassets", "currentliabilities",
         "currentratio", "da", "data", "debttoassets", "dilutedshares",
         "earliest", "ebit", "ebitmarginpct", "enddate", "eps", "epsdiluted",
-        "evidence", "fcf", "firstcomparableyear", "fundamentals",
+        "evidence", "fcf", "firstcomparableyear", "fiscalperiod",
+        "fiscalyear", "fundamentals",
         "goodwill", "grossmarginpct", "grossprofit", "intangibleassets",
         "latest", "metrics", "nearestsplitratio", "netincome", "note",
         "observedjump", "opcf", "operatingcashflow", "quarterly",
-        "quickratio", "revenue", "sharesout", "source_period",
+        "quarter_basis", "quickratio", "revenue", "sharesout", "source_period",
         "stockholdersequity", "totalassets", "totaldebt",
         "totalliabilities", "value", "withheld", "withheldthrough",
         "withheldvalues", "yearpairsexamined", "years", "yearsavailable",
@@ -929,6 +934,10 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         # and `taxonomy` / formsSeen / unitsSeen ride the hosted refusal that
         # quotes it. Our own reading of SEC companyfacts; no vendor, no identifier.
         "periods", "splitratiometrics", "splitratiowithheldthrough", "splitratiodate", "splitratio", "splitrationote", "noannualfacts", "usgaapconceptcount", "formsseen", "unitsseen", "sentence", "taxonomy",
+        # MCP output audit 2026-10-05 (P1-12): the hosted totalDebt's per-year
+        # basis (a label list aligned with `years`) and the sentence saying how
+        # to read it. Our own reading of the filer's tags; no identifier.
+        "totaldebtbasis", "totaldebtnote",
     }),
 
     # A: hosted anonymous /mcp, include_history false (22 keys) + true (31).
@@ -954,6 +963,11 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         "ytdchange",
         # MCP-C C6 (COUNSEL, 2026-09-26): the FRED terms-of-use notice.
         "fred_notice",
+        # 3.8.2 (MCP audit 2026-10-05): the per-row unit labels -- `ytdChange`
+        # mixed index points, percentage points and dollar levels with no unit,
+        # so CPI's +7.5 index points read as 7.5% inflation -- and the fetch
+        # stamp moved out of the data list (it had served an empty `{}` row).
+        "unit", "ytdchange_unit", "fetched_at",
     }),
 
     # The hosted tool is KEY-ONLY (anonymous -> "not available to anonymous
@@ -973,6 +987,8 @@ TOOL_EMIT_ALLOWLIST: dict[str, frozenset[str]] = {
         "value", "ytdchange",
         # MCP-C C6 (COUNSEL, 2026-09-26): the FRED terms-of-use notice.
         "fred_notice",
+        # 3.8.2 (MCP audit 2026-10-05): the same per-row unit labels as get_yield_curve.
+        "unit", "ytdchange_unit",
     }),
 
     # A: hosted anonymous /mcp, random (26 keys) + category (5). B: REST

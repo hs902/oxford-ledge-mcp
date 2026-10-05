@@ -5,6 +5,17 @@ All notable changes to `oxford-ledge-mcp` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.8.2 (2026-10-05)
+
+A patch release from the MCP audit of 2026-10-05 (a live, anonymous pass over every tool on the hosted server). The OWNER greenlit the bump the same day; the publish follows the audit fixes' review. No tool, argument or schema bound is added, renamed or removed, and no data key is renamed or removed.
+
+- **Added -- two keys on `ol_bdc_top_borrowers`.** Each row now keeps `fair_value_holders` (`active_holders` / `includes_inactive` / `unchecked`) and `inactive_holder_fair_value`, the amount of a merged-away lender's frozen mark left out of `cross_holder_sum_fair_value`. This tool rides the hosted server's anonymous transport, so these are the only data keys a 3.8.2 client newly sees.
+- **Host-side, not this package.** The shared emit allowlist also admits `get_fundamentals`' `quarter_basis`, `fiscalPeriod` / `fiscalYear`, `totalDebtBasis` / `totalDebtNote` and the FRED rows' `unit` / `ytdChange_unit` / `fetched_at`. Those admissions govern the HOSTED server's anonymous answers (any client, 3.8.1 included); this package's `get_fundamentals`, `get_yield_curve` and `get_fred_data` read SEC EDGAR and FRED directly and do not emit those keys.
+
+- **Fixed -- where an API key is made.** The keyed-leg refusal and the keyless tier refusal pointed the operator at an on-screen control the Oxford Ledge site removed on 2026-09-28; both sentences now say "press K or open Settings -> API keys", the route the site and the hosted server already name.
+- **Changed -- the tier name in two descriptions.** The `get_debt_maturities` and `get_capital_allocation` description text now names the tier "Researcher", the name the pricing page sells. The `[Tier: plus]` prefix every description carries, and the refusal's "requires the plus tier", still use `plus`, the tier key the API and `OXFORD_LEDGE_USER_TIER` take; this README's tool table marks those two tools **Plus** for the same reason.
+- **Docs.** The Claude plugin manifest (`claude-plugin/.claude-plugin/plugin.json`, not in the wheel) and `server.json` (the registry descriptor, not in the wheel) name 3.8.2.
+
 ## 3.8.1 (2026-09-27)
 
 A patch release on 3.8.0, cut from the external MCP re-audit of 2026-09-27 (the auditor's client ran 3.7.1); the OWNER greenlit its publish the same day. Nothing under `mcp_package/` changed between the 3.8.0 export and this cut except what is listed here. No tool, argument, schema bound or data key is added, renamed or removed.

@@ -1,7 +1,7 @@
 {
   "name": "oxford-ledge",
   "displayName": "Oxford Ledge",
-  "version": "3.8.1",
+  "version": "3.8.2",
   "description": "Ask your assistant; it reads the public record: SEC filings, 13F holdings, insider trades, BDC loans and FRED macro series, every figure with its source and period.",
   "author": {
     "name": "Oxford Ledge LLC",
