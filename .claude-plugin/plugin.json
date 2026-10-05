@@ -1,0 +1,37 @@
+{
+  "name": "oxford-ledge",
+  "displayName": "Oxford Ledge",
+  "version": "3.8.1",
+  "description": "Ask your assistant; it reads the public record: SEC filings, 13F holdings, insider trades, BDC loans and FRED macro series, every figure with its source and period.",
+  "author": {
+    "name": "Oxford Ledge LLC",
+    "url": "https://www.oxfordledge.com"
+  },
+  "homepage": "https://www.oxfordledge.com/mcp",
+  "repository": "https://github.com/hs902/oxford-ledge-mcp",
+  "license": "MIT",
+  "keywords": ["finance", "sec-edgar", "13f", "insider-trading", "bdc", "fred", "mcp"],
+  "icon": "./icon.png",
+  "documentationUrl": "https://www.oxfordledge.com/mcp",
+  "supportUrl": "https://github.com/hs902/oxford-ledge-mcp/issues",
+  "privacyPolicyUrl": "https://www.oxfordledge.com/privacy",
+  "termsOfServiceUrl": "https://www.oxfordledge.com/terms",
+  "mcpServers": {
+    "oxford-ledge": {
+      "type": "http",
+      "url": "https://www.oxfordledge.com/mcp",
+      "headers": {
+        "X-API-Key": "${user_config.api_key}"
+      }
+    }
+  },
+  "userConfig": {
+    "api_key": {
+      "type": "string",
+      "title": "Oxford Ledge API key (optional)",
+      "description": "An ol_live_ key from https://www.oxfordledge.com/mcp#get-your-key. Leave blank to use the anonymous tools; with a key, the tools your plan's tier allows.",
+      "sensitive": true,
+      "required": false
+    }
+  }
+}
