@@ -612,7 +612,9 @@ def tool_get_yield_curve(args):
                     pass  # ok-swallow: a malformed PRIOR cell leaves the tenor without a year-ago point, which history_coverage already counts; the current value is unaffected
     if not curve:
         raise _yc_all_failed_error(failed)
-    out = {"yield_curve": curve, "as_of": as_of, "source": "FRED"}
+    # 3.8.3 (live audit 2026-10-05, W3): say the unit. get_fred_data reports
+    # units: Percent for the same DGS series; this payload said nothing.
+    out = {"yield_curve": curve, "unit": "percent", "as_of": as_of, "source": "FRED"}
     if include_history:
         # Emitted even when EMPTY, and that is deliberate: the caller asked for
         # history, so the key must be present to say it was applied. Omitting

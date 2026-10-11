@@ -5,6 +5,14 @@ All notable changes to `oxford-ledge-mcp` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.8.3 (2026-10-10)
+
+A patch release from the live audits of 2026-10-05 (the wheel's standalone tools, the hosted pass, and the items the 3.8.2 publish vet carried forward).
+
+- **Fixed -- `get_fundamentals` `LongTermDebt` adds the current portion where the filer's own tags prove it.** The series served `us-gaap:LongTermDebt` (term debt including current maturities) where the filer tags it, and fell back to `LongTermDebtNoncurrent` (the noncurrent portion alone) otherwise, so one series switched definition mid-decade: AAPL FY2021 read 109,106M against a like-for-like 118,719M and the FY2021 -> FY2022 step read +0.9% where the comparable step was -7.3%. In a fallback year the series now adds the same period's `LongTermDebtCurrent` -- exactly the us-gaap `LongTermDebt` definition -- and only when the filer's own tags prove noncurrent + current = `LongTermDebt`: at least one year carries all three facts, and every such year agrees within 0.5%. Such a cell's `concepts` row reads `us-gaap:LongTermDebtNoncurrent+us-gaap:LongTermDebtCurrent`, and its value keeps the filed facts' number type (two whole-dollar integers sum to an integer, as its neighbours are). A filer that never tags `LongTermDebt` (nothing proves the identity), a filer whose tags contradict it, or a fallback year with no current-portion tag still serves the noncurrent figure under its own concept name, so a filer's series can still mix composed and noncurrent-only years; `concepts` names every cell. Commercial paper and short-term borrowings are still never summed.
+- **Fixed -- `get_sec_filings` refuses a filer it cannot find.** An unknown ticker, or a CIK SEC has no filer record for, answered `isError: false` with an empty `filings` list and an `error` string, which an agent reads as "this company filed nothing". Both are now a `DATA_UNAVAILABLE` refusal with the same sentence, as `get_fundamentals` already answers. A real filer with no matching filings in the window still returns an empty list naming the window.
+- **Added -- `get_yield_curve` names its unit.** The payload carries `unit: "percent"`; `get_fred_data` already reported `units: Percent` for the same DGS series.
+
 ## 3.8.2 (2026-10-05)
 
 A patch release from the MCP audit of 2026-10-05 (a live, anonymous pass over every tool on the hosted server). The OWNER greenlit the bump the same day; the publish follows the audit fixes' review. No tool, argument or schema bound is added, renamed or removed, and no data key is renamed or removed.

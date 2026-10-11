@@ -181,9 +181,13 @@ def tool_get_sec_filings(args):
     filing_type = (args.get("filing_type") or "").strip().upper()
     cik = ticker if ticker.isdigit() else _resolve_ticker_to_cik_via_sec(ticker)
     if not cik:
-        return {"ticker": ticker, "filings": [],
-                "error": f"No SEC filer matches ticker '{ticker}' -- check the "
-                         f"ticker symbol, or pass the numeric CIK instead."}
+        # 3.8.3 (live audit 2026-10-05, W2): an unresolvable ticker is a refusal
+        # (isError), as in get_fundamentals -- it answered isError=false with an
+        # empty list, which an agent reads as "this company filed nothing".
+        raise ToolError(
+            ToolError.DATA_UNAVAILABLE,
+            f"No SEC filer matches ticker '{ticker}' -- check the ticker symbol, "
+            f"or pass the numeric CIK instead (e.g. 0000320193).")
     api = "submissions API"
     cik_url = f"https://data.sec.gov/submissions/CIK{cik.zfill(10)}.json"
     req = urllib.request.Request(cik_url, headers={"User-Agent": _SEC_UA})
@@ -205,8 +209,8 @@ def tool_get_sec_filings(args):
                    f"-- the two SEC indexes disagree; retry later or pass "
                    f"the numeric CIK directly)"
                    if not ticker.isdigit() else " -- check the CIK.")
-            return {"ticker": ticker, "filings": [],
-                    "error": f"SEC EDGAR has no filer record for CIK {int(cik)}{via}"}
+            raise ToolError(ToolError.DATA_UNAVAILABLE,
+                            f"SEC EDGAR has no filer record for CIK {int(cik)}{via}")
         if e.code == 429:
             raise _sec_rate_limited(api, cik, e)
         raise ToolError(ToolError.DATA_UNAVAILABLE,

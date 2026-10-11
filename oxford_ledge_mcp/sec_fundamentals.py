@@ -99,10 +99,14 @@ _BASIS_ATTRIBUTION = (
 _CONCEPTS_NOTE = (
     "concepts mirrors data: for every label and period, the us-gaap concept "
     "that served the value. A label whose ladder has a fallback rung can "
-    "switch concept across periods (LongTermDebt -> LongTermDebtNoncurrent "
-    "when the filer tags no LongTermDebt for a year; the Noncurrent rung "
-    "EXCLUDES the current portion). Read it before comparing two years of "
-    "one label as like-for-like.")
+    "switch concept across periods. LongTermDebt: where the filer tags no "
+    "LongTermDebt for a year, the cell is LongTermDebtNoncurrent PLUS that "
+    "year's LongTermDebtCurrent (concept 'us-gaap:LongTermDebtNoncurrent+"
+    "us-gaap:LongTermDebtCurrent') only when the filer's own tags prove the "
+    "identity (at least one year carries all three and every such year "
+    "agrees); a cell named plain LongTermDebtNoncurrent EXCLUDES the current "
+    "portion, and one series can mix the two. Read it before comparing two "
+    "years of one label as like-for-like.")
 
 #: The split-affected labels. NetIncome, Revenue and the balance sheet are
 #: split-invariant and must never be withheld by the gate.
@@ -207,6 +211,72 @@ def _annual_rows(us_gaap, concepts, unit_key, duration):
         for k in per_concept:
             concept_by_end[k] = concept
     return by_end, concept_by_end
+
+
+# 3.8.3 (live audit 2026-10-05, W1): a noncurrent-fallback LongTermDebt year adds its
+# current portion where the filer's own tags prove the identity (3.8.3 vet F1/F2).
+_LTD_INCLUSIVE = "LongTermDebt"
+_LTD_NONCURRENT = "LongTermDebtNoncurrent"
+_LTD_CURRENT = "LongTermDebtCurrent"
+#: The concept a composed cell reports; "us-gaap:" is prefixed on the wire, so it
+#: reads us-gaap:LongTermDebtNoncurrent+us-gaap:LongTermDebtCurrent.
+_LTD_COMPOSED = _LTD_NONCURRENT + "+us-gaap:" + _LTD_CURRENT
+#: Relative tolerance for the filer's own LongTermDebt == noncurrent + current identity.
+_LTD_IDENTITY_TOL = 0.005
+
+
+def _fact_val(fact):
+    v = (fact or {}).get("val")
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _raw_num(fact):
+    """The fact's own number, int or float as filed (bool and non-numbers -> None)."""
+    v = (fact or {}).get("val")
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _compose_long_term_debt(us_gaap, by_end, concept_by_end):
+    """In place: a LongTermDebt cell served by the NONCURRENT fallback rung gets that
+    period's LongTermDebtCurrent added -- us-gaap LongTermDebt's own definition
+    (current + noncurrent term debt) -- where the filer's own tags prove the identity.
+    AAPL tags LongTermDebt only for FY2012-14 and FY2022-25; FY2021 served 109,106M
+    (noncurrent) against a like-for-like 118,719M, and the FY2021 -> FY2022 step read
+    +0.9% for a -7.3% move.
+
+    Proof means BOTH: at least one period carries all three facts (LongTermDebt,
+    noncurrent, current), and in every such period LongTermDebt == noncurrent + current
+    within 0.5%. An empty overlap is no proof (3.8.3 vet F1: a filer that never tags
+    LongTermDebt -- MRK -- was composed on zero evidence). A filer with no proving
+    year, a filer whose tags contradict the identity, or a year with no current-portion
+    fact keeps the noncurrent figure under its own concept name (the conceptsNote says
+    what that excludes), so one series can still mix composed and noncurrent-only
+    years (vet F2); `concepts` names every cell. A composed cell keeps its inputs'
+    number type -- int + int stays int beside int neighbours (vet F4). Nothing else is
+    summed -- no commercial paper, no short-term borrowings, no DebtCurrent (the 3.4.0
+    vet's double-count line)."""
+    fallback = [k for k, c in concept_by_end.items() if c == _LTD_NONCURRENT]
+    if not fallback or _LTD_CURRENT not in us_gaap:
+        return
+    cur, _ = _annual_rows(us_gaap, [_LTD_CURRENT], "USD", False)
+    nc, _ = _annual_rows(us_gaap, [_LTD_NONCURRENT], "USD", False)
+    inc, _ = _annual_rows(us_gaap, [_LTD_INCLUSIVE], "USD", False)
+    proving = 0
+    for per in set(nc) & set(cur) & set(inc):
+        a, b, c = _fact_val(nc[per]), _fact_val(cur[per]), _fact_val(inc[per])
+        if a is None or b is None or c is None:
+            continue
+        if abs(c - (a + b)) > _LTD_IDENTITY_TOL * max(abs(c), abs(a + b), 1.0):
+            return  # the filer's own tags contradict the identity: compose nothing
+        proving += 1
+    if not proving:
+        return  # no year carries all three facts: nothing proves the identity
+    for per in fallback:
+        a, b = _raw_num(by_end.get(per)), _raw_num(cur.get(per))
+        if a is None or b is None:
+            continue
+        by_end[per] = dict(by_end[per], val=a + b)
+        concept_by_end[per] = _LTD_COMPOSED
 
 
 def _span_days(e):
@@ -490,6 +560,8 @@ def tool_get_fundamentals(args):
                         else "USD")
             by_end, concept_by_end = _annual_rows(
                 us_gaap, concepts, unit_key, label in duration_labels)
+            if label == _LTD_INCLUSIVE:
+                _compose_long_term_debt(us_gaap, by_end, concept_by_end)
             if label == _EQUITY_LABEL and _has_nci:
                 # f1-sec-fundamentals-4: admit the Including rung per period
                 # the parent rung does not serve, when NCI is demonstrably

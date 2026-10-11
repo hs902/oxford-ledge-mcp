@@ -195,8 +195,9 @@ TOOL_NOTES: dict[str, tuple[str, ...]] = {
             "`windowFrom` is visible through this tool."
         ),
         (
-            "An empty `filings` list carries an `error` string naming the "
-            "window."
+            "An unknown ticker or CIK is refused (DATA_UNAVAILABLE); an empty "
+            "`filings` list for a real filer carries an `error` string naming "
+            "the window."
         ),
     ),
     "get_insider_trades": (
@@ -293,11 +294,14 @@ TOOL_NOTES: dict[str, tuple[str, ...]] = {
             "EPS is USD per share; DilutedShares is a share count."
         ),
         (
-            "`LongTermDebt` is us-gaap:LongTermDebt with a "
-            "LongTermDebtNoncurrent fallback -- it is NOT total debt "
-            "(commercial paper, short-term borrowings and, in fallback years, "
-            "the current portion are excluded); the pre-3.4.0 label `TotalDebt` "
-            "was this same series under a false name."
+            "`LongTermDebt` is us-gaap:LongTermDebt (term debt including current "
+            "maturities); where a filer tags only the noncurrent portion, that "
+            "year adds its LongTermDebtCurrent only when the filer's own tags "
+            "prove the identity (at least one year carries all three facts and "
+            "every such year agrees), else the cell is the noncurrent portion alone -- one "
+            "series can mix the two, and `concepts` names which. It is NOT total debt: commercial paper and "
+            "short-term borrowings are excluded; the pre-3.4.0 label `TotalDebt` "
+            "was this series under a false name."
         ),
         (
             "`StockholdersEquity` is the parent-only rung; for a filer that "
